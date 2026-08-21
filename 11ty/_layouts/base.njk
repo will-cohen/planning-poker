@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="Remote Planning Poker Web App for distributed software teams" />
+    <title>{{ title }} - Planning Poker</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header class="bg-white shadow">
+      <div class="max-w-7xl mx-auto py-6 px-4">
+        <h1 class="text-3xl font-bold text-gray-900">Planning Poker</h1>
+      </div>
+    </header>
+
+    <nav class="bg-gray-50 border-b border-gray-200">
+      <div class="max-w-7xl mx-auto px-4 py-4 flex gap-6">
+        <a href="/" class="text-blue-600 hover:text-blue-800 font-medium">Home</a>
+        <a href="/docs/" class="text-gray-700 hover:text-gray-900">Docs</a>
+        <a href="/about/" class="text-gray-700 hover:text-gray-900">About</a>
+      </div>
+    </nav>
+
+    <main class="max-w-7xl mx-auto py-12 px-4">
+      <div class="prose prose-sm md:prose lg:prose-lg max-w-none">
+        {{ content | safe }}
+      </div>
+    </main>
+
+    <footer class="bg-gray-900 text-white mt-16">
+      <div class="max-w-7xl mx-auto py-8 px-4">
+        <p class="text-gray-400">
+          &copy; 2026 Planning Poker. Built with React, Vite, 11ty, and Yjs CRDT.
+        </p>
+      </div>
+    </footer>
+  </body>
+</html>
