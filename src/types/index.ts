@@ -116,12 +116,31 @@ export interface JoinRoomInput {
   user: User
 }
 
+export interface EditVotableInput {
+  votableId: string
+  name: string
+  link?: string
+  description?: string
+}
+
+export interface RemoveVotableInput {
+  votableId: string
+}
+
+export interface ReorderVotableInput {
+  votableId: string
+  targetIndex: number
+}
+
 export type CRDTAction =
   | { type: 'createRoom'; payload: CreateRoomInput }
   | { type: 'upsertUser'; payload: User }
   | { type: 'joinAsVoter'; payload: JoinRoomInput }
   | { type: 'joinAsObserver'; payload: JoinRoomInput }
   | { type: 'addVotable'; payload: CreateVotableInput }
+  | { type: 'editVotable'; payload: EditVotableInput }
+  | { type: 'removeVotable'; payload: RemoveVotableInput }
+  | { type: 'reorderVotable'; payload: ReorderVotableInput }
   | { type: 'submitVote'; payload: SubmitVoteInput }
   | { type: 'revealVotes'; payload: RevealVotesInput }
   | { type: 'resetVotes'; payload: ResetVotesInput }

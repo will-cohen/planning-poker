@@ -3,24 +3,29 @@
  */
 
 import * as Y from 'yjs'
-import { WebrtcProvider } from 'y-webrtc'
+
 import type {
   ActiveVotableInput,
   CRDTAction,
   CRDTState,
   CreateRoomInput,
   CreateVotableInput,
+  EditVotableInput,
   FinalizeEstimateInput,
   JoinRoomInput,
+  RemoveVotableInput,
+  ReorderVotableInput,
+  ResetVotesInput,
   RevealVotesInput,
   Role,
   Room,
-  ResetVotesInput,
   SubmitVoteInput,
   User,
   Votable,
   Vote,
 } from '../types'
+
+import { WebrtcProvider } from 'y-webrtc'
 
 export interface SharedCollections {
   room: Y.Map<Room>
@@ -145,6 +150,92 @@ export function addVotable(ydoc: Y.Doc, input: CreateVotableInput): Votable {
   })
 
   return votable
+}
+
+/**
+ * Edit metadata for an existing votable item.
+ */
+export function editVotable(ydoc: Y.Doc, input: EditVotableInput): void {
+  ydoc.transact(() => {
+    const shared = getSharedCollections(ydoc)
+
+    updateVotable(shared, input.votableId, (votable) => ({
+      ...votable,
+      name: input.name,
+      link: input.link,
+      description: input.description,
+    }))
+
+    syncRoomVotables(shared)
+  })
+}
+
+/**
+ * Remove an item and all associated votes from the CRDT state.
+ */
+export function removeVotable(ydoc: Y.Doc, input: RemoveVotableInput): void {
+  ydoc.transact(() => {
+    const shared = getSharedCollections(ydoc)
+    const votables = shared.votables.toArray()
+    const index = votables.findIndex((votable) => votable.id === input.votableId)
+
+    if (index === -1) {
+      throw new Error(`Votable ${input.votableId} does not exist`)
+    }
+
+    shared.votables.delete(index, 1)
+
+    const voteKeysToDelete: string[] = []
+    shared.votes.forEach((vote, voteKey) => {
+      if (vote.votableId === input.votableId) {
+        voteKeysToDelete.push(voteKey)
+      }
+    })
+    voteKeysToDelete.forEach((key) => shared.votes.delete(key))
+
+    shared.uiState.delete(`reveal:${input.votableId}`)
+
+    if (shared.uiState.get('activeVotableId') === input.votableId) {
+      const nextActive = shared.votables.length > 0
+        ? shared.votables.get(Math.min(index, shared.votables.length - 1))?.id
+        : undefined
+
+      if (nextActive) {
+        shared.uiState.set('activeVotableId', nextActive)
+      } else {
+        shared.uiState.delete('activeVotableId')
+      }
+    }
+
+    syncRoomVotables(shared)
+  })
+}
+
+/**
+ * Move an item to a target position.
+ */
+export function reorderVotable(ydoc: Y.Doc, input: ReorderVotableInput): void {
+  ydoc.transact(() => {
+    const shared = getSharedCollections(ydoc)
+    const votables = shared.votables.toArray()
+    const sourceIndex = votables.findIndex((votable) => votable.id === input.votableId)
+
+    if (sourceIndex === -1) {
+      throw new Error(`Votable ${input.votableId} does not exist`)
+    }
+
+    const boundedTarget = Math.max(0, Math.min(input.targetIndex, votables.length - 1))
+    if (boundedTarget === sourceIndex) {
+      return
+    }
+
+    const [moved] = votables.splice(sourceIndex, 1)
+    votables.splice(boundedTarget, 0, moved)
+
+    shared.votables.delete(0, shared.votables.length)
+    shared.votables.insert(0, votables)
+    syncRoomVotables(shared)
+  })
 }
 
 /**
@@ -279,6 +370,15 @@ export function dispatchCRDTAction(ydoc: Y.Doc, action: CRDTAction): CRDTState |
       break
     case 'addVotable':
       addVotable(ydoc, action.payload)
+      break
+    case 'editVotable':
+      editVotable(ydoc, action.payload)
+      break
+    case 'removeVotable':
+      removeVotable(ydoc, action.payload)
+      break
+    case 'reorderVotable':
+      reorderVotable(ydoc, action.payload)
       break
     case 'submitVote':
       submitVote(ydoc, action.payload)

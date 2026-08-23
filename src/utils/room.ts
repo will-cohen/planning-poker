@@ -2,8 +2,6 @@
  * Room utility functions for managing Planning Poker sessions
  */
 
-import { v4 as uuidv4 } from 'crypto'
-
 /**
  * Generate a unique room ID
  */
@@ -15,8 +13,10 @@ export function generateRoomId(): string {
  * Generate a unique participant ID
  */
 export function generateParticipantId(): string {
-  // In a real app, this might use crypto.randomUUID()
-  // For now, use a simple timestamp-based ID
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID()
+  }
+
   return `user_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`
 }
 
@@ -24,7 +24,7 @@ export function generateParticipantId(): string {
  * Create a shareable invite URL
  */
 export function createInviteUrl(roomId: string, baseUrl: string = window.location.origin): string {
-  return `${baseUrl}/room/${roomId}`
+  return `${baseUrl}/app/?room=${encodeURIComponent(roomId)}`
 }
 
 /**
@@ -33,4 +33,15 @@ export function createInviteUrl(roomId: string, baseUrl: string = window.locatio
 export function isValidRoomId(roomId: string): boolean {
   // Room IDs should be 6 characters, alphanumeric
   return /^[A-Z0-9]{6}$/.test(roomId)
+}
+
+export function generateProfileIcon(name: string): string {
+  const glyphs = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'J', 'K', 'L', 'M', 'N', 'P', 'R', 'S', 'T', 'V', 'W', 'Z']
+  const normalized = name.trim().toUpperCase()
+  if (!normalized) {
+    return glyphs[Math.floor(Math.random() * glyphs.length)]
+  }
+
+  const code = normalized.charCodeAt(0)
+  return glyphs[code % glyphs.length]
 }
