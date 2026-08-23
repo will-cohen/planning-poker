@@ -37,8 +37,16 @@ export function createWebRTCProvider(
   signalingServers: string[] = [],
   password?: string
 ): WebsocketProvider {
+  // Get signaling server URL from environment or use fallback
+  const defaultSignalingServer =
+    import.meta.env.VITE_SIGNALING_SERVER || 'ws://localhost:4444'
+  
+  const signalingUrl = signalingServers.length > 0 
+    ? signalingServers[0] 
+    : defaultSignalingServer
+
   const provider = new WebsocketProvider(
-    signalingServers.length > 0 ? signalingServers[0] : 'ws://localhost:1234',
+    signalingUrl,
     `planning-poker-${roomId}`,
     ydoc,
     {

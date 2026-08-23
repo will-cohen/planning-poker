@@ -96,6 +96,39 @@ npm run dev:vite
 npm run dev:css
 ```
 
+### Signaling Server (WebRTC)
+
+The app uses WebRTC for peer-to-peer communication, which requires a signaling server for connection establishment. A lightweight signaling server is included in the `server/` directory.
+
+**Quick start with Docker:**
+
+```bash
+# Start signaling server + Redis
+docker-compose up
+```
+
+The signaling server will be available at `ws://localhost:4444`.
+
+**Without Docker:**
+
+```bash
+cd server
+npm install
+npm start
+```
+
+See [server/README.md](./server/README.md) for detailed setup, configuration, and deployment instructions.
+
+**Configuration:**
+
+Update your `.env` file to point to your signaling server:
+
+```env
+VITE_SIGNALING_SERVER=ws://localhost:4444
+```
+
+For production, use the URL of your deployed signaling server (with `wss://` for secure WebSocket).
+
 ### Build
 
 Build both static site and SPA (builds in correct order):

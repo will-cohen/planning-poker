@@ -1,0 +1,42 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: planning-poker-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - planning-poker
+
+  signaling-server:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    container_name: planning-poker-signaling
+    ports:
+      - "4444:4444"
+    environment:
+      NODE_ENV: production
+      PORT: 4444
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - planning-poker
+    restart: unless-stopped
+
+volumes:
+  redis_data:
+
+networks:
+  planning-poker:
+    driver: bridge
