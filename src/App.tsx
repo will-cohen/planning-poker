@@ -1,18 +1,29 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import {
   CARD_VALUES,
+  type CRDTAction,
   type CRDTState,
   type Role,
   type User,
   type Votable,
 } from './types'
 import {
+  createIndexedDBProvider,
   createCRDTReducer,
   createWebRTCProvider,
   getConnectedPeers,
   initializeYDoc,
 } from './utils/crdt'
+import {
+  buildSessionCsv,
+  buildSessionJson,
+  clearLastSession,
+  loadLastSession,
+  saveLastSession,
+  type StoredSession,
+} from './utils/session'
+import { trackError, trackEvent } from './utils/telemetry'
 import {
   createInviteUrl,
   generateParticipantId,
@@ -50,11 +61,14 @@ export default function App(): React.ReactElement {
   const [joinRole, setJoinRole] = useState<Role>('voter')
 
   const [session, setSession] = useState<Session | null>(null)
+  const [restorableSession, setRestorableSession] = useState<StoredSession | null>(null)
   const [snapshot, setSnapshot] = useState<CRDTState | undefined>(undefined)
   const [connectionStatus, setConnectionStatus] = useState<'connected' | 'disconnected'>('disconnected')
   const [peerCount, setPeerCount] = useState(1)
   const [awarenessUsers, setAwarenessUsers] = useState<AwarenessUser[]>([])
+  const [persistenceState, setPersistenceState] = useState<'idle' | 'syncing' | 'synced' | 'error'>('idle')
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
+  const [exportMessage, setExportMessage] = useState<string | null>(null)
 
   const [newItemName, setNewItemName] = useState('')
   const [newItemLink, setNewItemLink] = useState('')
@@ -63,12 +77,56 @@ export default function App(): React.ReactElement {
   const [editingName, setEditingName] = useState('')
   const [editingLink, setEditingLink] = useState('')
   const [editingDescription, setEditingDescription] = useState('')
+  const [finalEstimateInput, setFinalEstimateInput] = useState('')
 
   const reducerRef = useRef<ReturnType<typeof createCRDTReducer> | null>(null)
   const ydocRef = useRef<ReturnType<typeof initializeYDoc> | null>(null)
   const providerRef = useRef<ReturnType<typeof createWebRTCProvider> | null>(null)
   const hasCreatedRoomRef = useRef(false)
   const hasJoinedRoomRef = useRef(false)
+
+  useEffect(() => {
+    setRestorableSession(loadLastSession())
+
+    const onWindowError = (event: ErrorEvent): void => {
+      trackError(event.error ?? event.message, { source: 'window.error' })
+      setErrorMessage('An unexpected error occurred. Please refresh or rejoin the room.')
+    }
+
+    const onUnhandledRejection = (event: PromiseRejectionEvent): void => {
+      trackError(event.reason, { source: 'window.unhandledrejection' })
+      setErrorMessage('A background operation failed. Please try the action again.')
+    }
+
+    window.addEventListener('error', onWindowError)
+    window.addEventListener('unhandledrejection', onUnhandledRejection)
+
+    return () => {
+      window.removeEventListener('error', onWindowError)
+      window.removeEventListener('unhandledrejection', onUnhandledRejection)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!session) {
+      return
+    }
+
+    const persisted: StoredSession = {
+      mode: session.mode,
+      roomId: session.roomId,
+      roomName: session.roomName,
+      user: {
+        id: session.user.id,
+        name: session.user.name,
+        profileIcon: session.user.profileIcon,
+        role: session.user.role,
+      },
+    }
+
+    saveLastSession(persisted)
+    setRestorableSession(persisted)
+  }, [session])
 
   useEffect(() => {
     if (!session) {
@@ -79,6 +137,7 @@ export default function App(): React.ReactElement {
       setAwarenessUsers([])
       setPeerCount(1)
       setConnectionStatus('disconnected')
+      setPersistenceState('idle')
       return
     }
 
@@ -87,7 +146,19 @@ export default function App(): React.ReactElement {
 
     const ydoc = initializeYDoc({ roomId: session.roomId, awareness: true })
     const provider = createWebRTCProvider(ydoc, session.roomId)
+    const indexeddb = createIndexedDBProvider(ydoc, session.roomId)
     const reducer = createCRDTReducer(ydoc)
+    setPersistenceState('syncing')
+
+    indexeddb.whenSynced
+      .then(() => {
+        setPersistenceState('synced')
+        trackEvent('indexeddb_synced', { roomId: session.roomId })
+      })
+      .catch((error) => {
+        setPersistenceState('error')
+        trackError(error, { roomId: session.roomId, stage: 'indexeddb_sync' })
+      })
 
     ydocRef.current = ydoc
     providerRef.current = provider
@@ -118,9 +189,11 @@ export default function App(): React.ReactElement {
 
     ydoc.on('update', refreshSnapshot)
     provider.awareness.on('change', refreshAwareness)
-    provider.on('status', ({ status }: { status: 'connected' | 'disconnected' }) => {
+    provider.on('status', ({ connected }: { connected: boolean }) => {
+      const status = connected ? 'connected' : 'disconnected'
       setConnectionStatus(status)
       setPeerCount(getConnectedPeers(provider))
+      trackEvent('signaling_status', { status, roomId: session.roomId })
     })
 
     refreshSnapshot()
@@ -129,6 +202,7 @@ export default function App(): React.ReactElement {
     return () => {
       provider.awareness.off('change', refreshAwareness)
       ydoc.off('update', refreshSnapshot)
+      void indexeddb.destroy()
       provider.destroy()
       ydoc.destroy()
     }
@@ -242,6 +316,31 @@ export default function App(): React.ReactElement {
   }, [snapshot])
 
   const inviteUrl = session ? createInviteUrl(session.roomId) : ''
+  const onlineUserIds = useMemo(() => new Set(awarenessUsers.map((user) => user.id)), [awarenessUsers])
+  const votedUserIds = useMemo(() => new Set(activeVotable?.votes.map((vote) => vote.userId) ?? []), [activeVotable])
+
+  const persistenceLabel = useMemo(() => {
+    switch (persistenceState) {
+      case 'syncing':
+        return 'Restoring room state...'
+      case 'synced':
+        return 'Session persisted locally'
+      case 'error':
+        return 'Local persistence unavailable'
+      default:
+        return ''
+    }
+  }, [persistenceState])
+
+  const downloadTextFile = (filename: string, mimeType: string, content: string): void => {
+    const blob = new Blob([content], { type: mimeType })
+    const href = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    anchor.href = href
+    anchor.download = filename
+    anchor.click()
+    URL.revokeObjectURL(href)
+  }
 
   const requireReducer = (): ReturnType<typeof createCRDTReducer> => {
     if (!reducerRef.current) {
@@ -250,6 +349,21 @@ export default function App(): React.ReactElement {
 
     return reducerRef.current
   }
+
+  const dispatchAction = useCallback((action: CRDTAction): void => {
+    const reducer = requireReducer()
+    const startedAt = performance.now()
+
+    try {
+      reducer.dispatch(action)
+      const duration = Math.round(performance.now() - startedAt)
+      trackEvent('action_dispatched', { action: action.type, durationMs: duration })
+      setErrorMessage(null)
+    } catch (error) {
+      trackError(error, { action: action.type })
+      setErrorMessage(`Action failed: ${action.type}`)
+    }
+  }, [])
 
   const createUser = (name: string, role: Role): User => ({
     id: generateParticipantId(),
@@ -277,6 +391,7 @@ export default function App(): React.ReactElement {
       roomName: trimmedRoomName,
       user: facilitator,
     })
+    trackEvent('room_created', { roomId })
     setErrorMessage(null)
   }
 
@@ -295,6 +410,7 @@ export default function App(): React.ReactElement {
       roomId: normalizedRoom,
       user,
     })
+    trackEvent('room_join_requested', { roomId: normalizedRoom, role: joinRole })
     setErrorMessage(null)
   }
 
@@ -308,9 +424,8 @@ export default function App(): React.ReactElement {
       return
     }
 
-    const reducer = requireReducer()
     const votableId = generateParticipantId()
-    reducer.dispatch({
+    dispatchAction({
       type: 'addVotable',
       payload: {
         id: votableId,
@@ -321,7 +436,7 @@ export default function App(): React.ReactElement {
     })
 
     if (!activeVotableId) {
-      reducer.dispatch({
+      dispatchAction({
         type: 'setActiveVotable',
         payload: { votableId },
       })
@@ -337,8 +452,7 @@ export default function App(): React.ReactElement {
       return
     }
 
-    const reducer = requireReducer()
-    reducer.dispatch({
+    dispatchAction({
       type: 'submitVote',
       payload: {
         id: generateParticipantId(),
@@ -354,7 +468,7 @@ export default function App(): React.ReactElement {
       return
     }
 
-    requireReducer().dispatch({
+    dispatchAction({
       type: 'revealVotes',
       payload: {
         votableId: activeVotableId,
@@ -368,7 +482,7 @@ export default function App(): React.ReactElement {
       return
     }
 
-    requireReducer().dispatch({
+    dispatchAction({
       type: 'resetVotes',
       payload: { votableId: activeVotableId },
     })
@@ -379,7 +493,7 @@ export default function App(): React.ReactElement {
       return
     }
 
-    requireReducer().dispatch({
+    dispatchAction({
       type: 'finalizeEstimate',
       payload: {
         votableId: activeVotableId,
@@ -400,7 +514,7 @@ export default function App(): React.ReactElement {
       return
     }
 
-    requireReducer().dispatch({
+    dispatchAction({
       type: 'editVotable',
       payload: {
         votableId: editingId,
@@ -413,7 +527,7 @@ export default function App(): React.ReactElement {
   }
 
   const handleSetActive = (votableId: string): void => {
-    requireReducer().dispatch({
+    dispatchAction({
       type: 'setActiveVotable',
       payload: { votableId },
     })
@@ -424,7 +538,7 @@ export default function App(): React.ReactElement {
       return
     }
 
-    requireReducer().dispatch({
+    dispatchAction({
       type: 'reorderVotable',
       payload: { votableId, targetIndex },
     })
@@ -435,10 +549,34 @@ export default function App(): React.ReactElement {
       return
     }
 
-    requireReducer().dispatch({
+    dispatchAction({
       type: 'removeVotable',
       payload: { votableId },
     })
+  }
+
+  const handleExportCsv = (): void => {
+    if (!snapshot || !session) {
+      return
+    }
+
+    const csv = buildSessionCsv(snapshot)
+    const filename = `planning-poker-${session.roomId}-${Date.now()}.csv`
+    downloadTextFile(filename, 'text/csv;charset=utf-8', csv)
+    setExportMessage('CSV exported')
+    trackEvent('session_exported', { format: 'csv', roomId: session.roomId })
+  }
+
+  const handleExportJson = (): void => {
+    if (!snapshot || !session) {
+      return
+    }
+
+    const json = buildSessionJson(snapshot)
+    const filename = `planning-poker-${session.roomId}-${Date.now()}.json`
+    downloadTextFile(filename, 'application/json;charset=utf-8', json)
+    setExportMessage('JSON exported')
+    trackEvent('session_exported', { format: 'json', roomId: session.roomId })
   }
 
   const handleCopyInvite = async (): Promise<void> => {
@@ -447,16 +585,61 @@ export default function App(): React.ReactElement {
     }
 
     await navigator.clipboard.writeText(inviteUrl)
+    trackEvent('invite_copied', { roomId: session?.roomId ?? '' })
   }
 
   const leaveRoom = (): void => {
+    trackEvent('room_left', { roomId: session?.roomId ?? '' })
     setSession(null)
     setSnapshot(undefined)
     setErrorMessage(null)
+    setExportMessage(null)
+  }
+
+  const restoreSession = (): void => {
+    if (!restorableSession) {
+      return
+    }
+
+    setSession({
+      mode: restorableSession.mode,
+      roomId: restorableSession.roomId,
+      roomName: restorableSession.roomName,
+      user: {
+        ...restorableSession.user,
+        online: true,
+        joinedAt: Date.now(),
+      },
+    })
+
+    trackEvent('session_restored', { roomId: restorableSession.roomId, mode: restorableSession.mode })
+  }
+
+  const forgetStoredSession = (): void => {
+    clearLastSession()
+    setRestorableSession(null)
+    trackEvent('stored_session_cleared')
   }
 
   const renderLobby = (): React.ReactElement => (
     <main className="max-w-5xl mx-auto px-4 py-10 grid lg:grid-cols-2 gap-8">
+      {restorableSession ? (
+        <section className="lg:col-span-2 bg-amber-50 border border-amber-200 rounded-xl p-4 flex flex-wrap gap-3 justify-between items-center" aria-live="polite">
+          <div>
+            <p className="font-semibold text-amber-900">Resume previous session</p>
+            <p className="text-sm text-amber-800">{restorableSession.roomName ?? restorableSession.roomId} as {restorableSession.user.name}</p>
+          </div>
+          <div className="flex gap-2">
+            <button type="button" onClick={restoreSession} className="px-3 py-2 rounded-lg bg-amber-700 text-white" aria-label="Resume previous session">
+              Resume
+            </button>
+            <button type="button" onClick={forgetStoredSession} className="px-3 py-2 rounded-lg bg-amber-100 text-amber-900" aria-label="Forget previous session">
+              Forget
+            </button>
+          </div>
+        </section>
+      ) : null}
+
       <section className="bg-white rounded-xl shadow-lg border border-slate-200 p-6">
         <h2 className="text-2xl font-bold text-slate-900">Create Room</h2>
         <p className="text-slate-600 mt-2">Start a new planning poker session as facilitator.</p>
@@ -464,6 +647,7 @@ export default function App(): React.ReactElement {
           <label className="block">
             <span className="text-sm text-slate-700">Your Name</span>
             <input
+              aria-label="Create room display name"
               value={displayName}
               onChange={(event) => setDisplayName(event.target.value)}
               className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2"
@@ -473,6 +657,7 @@ export default function App(): React.ReactElement {
           <label className="block">
             <span className="text-sm text-slate-700">Room Name</span>
             <input
+              aria-label="Create room name"
               value={roomName}
               onChange={(event) => setRoomName(event.target.value)}
               className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2"
@@ -483,6 +668,7 @@ export default function App(): React.ReactElement {
         <button
           type="button"
           onClick={handleCreateRoom}
+          aria-label="Create planning poker room"
           className="mt-5 w-full bg-slate-900 hover:bg-slate-700 text-white rounded-lg px-4 py-2 font-semibold"
         >
           Create Room
@@ -496,6 +682,7 @@ export default function App(): React.ReactElement {
           <label className="block">
             <span className="text-sm text-slate-700">Your Name</span>
             <input
+              aria-label="Join room display name"
               value={displayName}
               onChange={(event) => setDisplayName(event.target.value)}
               className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2"
@@ -505,6 +692,7 @@ export default function App(): React.ReactElement {
           <label className="block">
             <span className="text-sm text-slate-700">Room ID</span>
             <input
+              aria-label="Room ID to join"
               value={joinRoomId}
               onChange={(event) => setJoinRoomId(event.target.value.toUpperCase())}
               className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 tracking-widest"
@@ -514,6 +702,7 @@ export default function App(): React.ReactElement {
           <label className="block">
             <span className="text-sm text-slate-700">Role</span>
             <select
+              aria-label="Role when joining room"
               value={joinRole}
               onChange={(event) => setJoinRole(event.target.value as Role)}
               className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2"
@@ -526,6 +715,7 @@ export default function App(): React.ReactElement {
         <button
           type="button"
           onClick={handleJoinRoom}
+          aria-label="Join planning poker room"
           className="mt-5 w-full bg-teal-700 hover:bg-teal-600 text-white rounded-lg px-4 py-2 font-semibold"
         >
           Join Room
@@ -547,18 +737,37 @@ export default function App(): React.ReactElement {
               <p className="text-sm text-slate-500 mt-1">
                 Connection: <span className="font-semibold">{connectionStatus}</span> | Peers: {peerCount}
               </p>
+              {persistenceLabel ? <p className="text-xs text-slate-500 mt-1" role="status" aria-live="polite">{persistenceLabel}</p> : null}
             </div>
             <div className="flex gap-2">
               <button
                 type="button"
                 onClick={handleCopyInvite}
+                aria-label="Copy invite link"
                 className="bg-slate-100 hover:bg-slate-200 text-slate-900 px-3 py-2 rounded-lg"
               >
                 Copy Invite
               </button>
               <button
                 type="button"
+                onClick={handleExportCsv}
+                aria-label="Export session as CSV"
+                className="bg-emerald-100 hover:bg-emerald-200 text-emerald-900 px-3 py-2 rounded-lg"
+              >
+                Export CSV
+              </button>
+              <button
+                type="button"
+                onClick={handleExportJson}
+                aria-label="Export session as JSON"
+                className="bg-cyan-100 hover:bg-cyan-200 text-cyan-900 px-3 py-2 rounded-lg"
+              >
+                Export JSON
+              </button>
+              <button
+                type="button"
                 onClick={leaveRoom}
+                aria-label="Leave room"
                 className="bg-rose-100 hover:bg-rose-200 text-rose-900 px-3 py-2 rounded-lg"
               >
                 Leave
@@ -566,6 +775,7 @@ export default function App(): React.ReactElement {
             </div>
           </div>
           <p className="text-xs text-slate-500 mt-3 break-all">{inviteUrl}</p>
+          {exportMessage ? <p className="text-xs text-emerald-700 mt-1" aria-live="polite">{exportMessage}</p> : null}
         </section>
 
         <section className="grid xl:grid-cols-[1.2fr_1fr_1fr] gap-6">
@@ -584,18 +794,21 @@ export default function App(): React.ReactElement {
                   {editingId === item.id ? (
                     <div className="space-y-2">
                       <input
+                        aria-label="Edit item name"
                         value={editingName}
                         onChange={(event) => setEditingName(event.target.value)}
                         className="w-full rounded border border-slate-300 px-2 py-1"
                         placeholder="Item name"
                       />
                       <input
+                        aria-label="Edit item link"
                         value={editingLink}
                         onChange={(event) => setEditingLink(event.target.value)}
                         className="w-full rounded border border-slate-300 px-2 py-1"
                         placeholder="Link"
                       />
                       <textarea
+                        aria-label="Edit item description"
                         value={editingDescription}
                         onChange={(event) => setEditingDescription(event.target.value)}
                         className="w-full rounded border border-slate-300 px-2 py-1"
@@ -650,18 +863,21 @@ export default function App(): React.ReactElement {
               <div className="pt-4 border-t border-slate-200 space-y-2">
                 <h4 className="font-semibold text-slate-900">Add Item</h4>
                 <input
+                  aria-label="New item name"
                   value={newItemName}
                   onChange={(event) => setNewItemName(event.target.value)}
                   className="w-full rounded border border-slate-300 px-2 py-2"
                   placeholder="Feature title"
                 />
                 <input
+                  aria-label="New item link"
                   value={newItemLink}
                   onChange={(event) => setNewItemLink(event.target.value)}
                   className="w-full rounded border border-slate-300 px-2 py-2"
                   placeholder="https://ticket"
                 />
                 <textarea
+                  aria-label="New item description"
                   value={newItemDescription}
                   onChange={(event) => setNewItemDescription(event.target.value)}
                   className="w-full rounded border border-slate-300 px-2 py-2"
@@ -671,6 +887,7 @@ export default function App(): React.ReactElement {
                 <button
                   type="button"
                   onClick={handleAddVotable}
+                  aria-label="Add backlog item"
                   className="w-full bg-teal-700 hover:bg-teal-600 text-white py-2 rounded-lg font-semibold"
                 >
                   Add Item
@@ -699,6 +916,8 @@ export default function App(): React.ReactElement {
                         type="button"
                         disabled={!canVote || !activeVotable}
                         onClick={() => handleVote(value)}
+                        aria-label={`Vote ${value}`}
+                        aria-pressed={selected}
                         className={`rounded-lg py-2 font-semibold border ${selected ? 'bg-slate-900 text-white border-slate-900' : 'bg-white border-slate-300'} ${!canVote ? 'opacity-40 cursor-not-allowed' : 'hover:border-slate-500'}`}
                       >
                         {value}
@@ -718,6 +937,7 @@ export default function App(): React.ReactElement {
                     type="button"
                     onClick={handleReveal}
                     disabled={!isFacilitator || !activeVotable.votes.length}
+                    aria-label="Reveal votes"
                     className="px-3 py-2 rounded-lg bg-slate-900 text-white disabled:opacity-40"
                   >
                     Reveal
@@ -726,14 +946,23 @@ export default function App(): React.ReactElement {
                     type="button"
                     onClick={handleReset}
                     disabled={!isFacilitator}
+                    aria-label="Reset current voting round"
                     className="px-3 py-2 rounded-lg bg-amber-100 text-amber-900 disabled:opacity-40"
                   >
                     Reset Round
                   </button>
+                  <input
+                    aria-label="Final estimate"
+                    value={finalEstimateInput}
+                    onChange={(event) => setFinalEstimateInput(event.target.value)}
+                    className="px-2 py-2 rounded-lg border border-slate-300 w-28"
+                    placeholder="Estimate"
+                  />
                   <button
                     type="button"
-                    onClick={() => handleFinalize(votesByParticipant.get(session?.user.id ?? '') ?? '?')}
+                    onClick={() => handleFinalize(finalEstimateInput || (votesByParticipant.get(session?.user.id ?? '') ?? '?'))}
                     disabled={!isFacilitator || !revealState.revealed}
+                    aria-label="Finalize estimate"
                     className="px-3 py-2 rounded-lg bg-emerald-100 text-emerald-900 disabled:opacity-40"
                   >
                     Finalize Selected
@@ -759,8 +988,8 @@ export default function App(): React.ReactElement {
             <h3 className="text-xl font-bold text-slate-900">Participants</h3>
             <div className="space-y-2">
               {allParticipants.map((participant) => {
-                const isOnline = awarenessUsers.some((entry) => entry.id === participant.id)
-                const hasVoted = !!votesByParticipant.get(participant.id)
+                const isOnline = onlineUserIds.has(participant.id)
+                const hasVoted = votedUserIds.has(participant.id)
 
                 return (
                   <div key={participant.id} className="rounded-lg border border-slate-200 p-2 flex items-center justify-between">
@@ -793,9 +1022,9 @@ export default function App(): React.ReactElement {
             Planning Poker
           </h1>
           <p className="text-slate-600 mt-1">
-            Phase 1 MVP: room management, presence, item workflow, and voting reveal loop.
+            Phase 2 hardening: persistence, export, accessibility, analytics, and performance tuning.
           </p>
-          {errorMessage ? <p className="text-rose-700 mt-2 text-sm">{errorMessage}</p> : null}
+          {errorMessage ? <p className="text-rose-700 mt-2 text-sm" role="alert">{errorMessage}</p> : null}
         </div>
       </header>
 

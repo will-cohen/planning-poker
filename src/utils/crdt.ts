@@ -3,6 +3,7 @@
  */
 
 import * as Y from 'yjs'
+import { IndexeddbPersistence } from 'y-indexeddb'
 
 import type {
   ActiveVotableInput,
@@ -574,6 +575,13 @@ export function createWebRTCProvider(
   })
 
   return provider
+}
+
+/**
+ * Enable IndexedDB persistence for room state and restoration after refresh.
+ */
+export function createIndexedDBProvider(ydoc: Y.Doc, roomId: string): IndexeddbPersistence {
+  return new IndexeddbPersistence(`planning-poker-${roomId}`, ydoc)
 }
 
 /**
