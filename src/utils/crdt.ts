@@ -269,7 +269,6 @@ export function submitVote(ydoc: Y.Doc, input: SubmitVoteInput): Vote {
 
     const voteKey = `${vote.votableId}:${vote.userId}`
     shared.votes.set(voteKey, vote)
-    setRevealState(shared, vote.votableId, false)
     syncRoomVotables(shared)
   })
 
