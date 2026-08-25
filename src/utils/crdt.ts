@@ -3,7 +3,6 @@
  */
 
 import * as Y from 'yjs'
-import { IndexeddbPersistence } from 'y-indexeddb'
 
 import type {
   ActiveVotableInput,
@@ -26,6 +25,7 @@ import type {
   Vote,
 } from '../types'
 
+import { IndexeddbPersistence } from 'y-indexeddb'
 import { WebrtcProvider } from 'y-webrtc'
 
 export interface SharedCollections {
