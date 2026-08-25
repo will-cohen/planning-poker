@@ -132,11 +132,21 @@ export interface ReorderVotableInput {
   targetIndex: number
 }
 
+export interface RemoveUserInput {
+  userId: string
+}
+
+export interface MarkUserOfflineInput {
+  userId: string
+}
+
 export type CRDTAction =
   | { type: 'createRoom'; payload: CreateRoomInput }
   | { type: 'upsertUser'; payload: User }
   | { type: 'joinAsVoter'; payload: JoinRoomInput }
   | { type: 'joinAsObserver'; payload: JoinRoomInput }
+  | { type: 'removeUser'; payload: RemoveUserInput }
+  | { type: 'markUserOffline'; payload: MarkUserOfflineInput }
   | { type: 'addVotable'; payload: CreateVotableInput }
   | { type: 'editVotable'; payload: EditVotableInput }
   | { type: 'removeVotable'; payload: RemoveVotableInput }

@@ -84,6 +84,7 @@ export default function App(): React.ReactElement {
   const providerRef = useRef<ReturnType<typeof createWebRTCProvider> | null>(null)
   const hasCreatedRoomRef = useRef(false)
   const hasJoinedRoomRef = useRef(false)
+  const previousAwarenessUsersRef = useRef<Set<string>>(new Set())
 
   useEffect(() => {
     setRestorableSession(loadLastSession())
@@ -176,13 +177,43 @@ export default function App(): React.ReactElement {
 
     const refreshAwareness = (): void => {
       const users: AwarenessUser[] = []
+      const currentUserIds = new Set<string>()
+
       provider.awareness.getStates().forEach((state) => {
         const userState = (state as { user?: AwarenessUser }).user
         if (userState) {
           users.push(userState)
+          currentUserIds.add(userState.id)
         }
       })
-      console.log('[Awareness] Updated users:', users)
+
+      const previousUserIds = previousAwarenessUsersRef.current
+
+      // Only detect disconnects if:
+      // 1. We've previously tracked users (avoid false positives during initial sync)
+      // 2. The previous set was non-empty (so we had a baseline)
+      // 3. A user who was present is now missing (and not the local user)
+      const disconnectedUserIds = previousUserIds.size > 0
+        ? Array.from(previousUserIds).filter(
+            (userId) => !currentUserIds.has(userId) && userId !== session.user.id
+          )
+        : []
+
+      // Mark users as offline when they disconnect from awareness
+      if (disconnectedUserIds.length > 0 && reducerRef.current) {
+        disconnectedUserIds.forEach((userId) => {
+          console.log('[Awareness] User disconnected:', userId)
+          // Use markUserOffline instead of removeUser to keep users in the room
+          reducerRef.current!.dispatch({
+            type: 'markUserOffline',
+            payload: { userId },
+          })
+          trackEvent('user_disconnected', { roomId: session.roomId, userId })
+        })
+      }
+
+      previousAwarenessUsersRef.current = currentUserIds
+      console.log('[Awareness] Updated users:', users, 'Total in awareness:', currentUserIds.size)
       setAwarenessUsers(users)
       setPeerCount(getConnectedPeers(provider))
     }
@@ -194,6 +225,9 @@ export default function App(): React.ReactElement {
       profileIcon: session.user.profileIcon,
     })
     console.log('[Awareness] Set local user state:', { id: session.user.id, name: session.user.name })
+
+    // Initialize awareness tracking
+    previousAwarenessUsersRef.current = new Set([session.user.id])
 
     ydoc.on('update', refreshSnapshot)
     provider.awareness.on('change', refreshAwareness)
@@ -763,10 +797,24 @@ export default function App(): React.ReactElement {
               <div>
                 <h2 className="text-2xl font-bold text-slate-900">{room?.name ?? `Room ${session?.roomId}`}</h2>
                 <p className="text-slate-600">Room ID: <span className="font-semibold tracking-widest">{session?.roomId}</span></p>
-                <p className="text-sm text-slate-500 mt-1">
-                  Connection: <span className="font-semibold">{connectionStatus}</span> | Peers: {peerCount}
+                <p className="text-sm text-slate-500 mt-1 flex items-center gap-2">
+                  Connection: 
+                  <span className={`inline-flex items-center gap-1 font-semibold px-2 py-1 rounded ${
+                    connectionStatus === 'connected' 
+                      ? 'bg-emerald-100 text-emerald-900' 
+                      : 'bg-amber-100 text-amber-900'
+                  }`}>
+                    <span className={`w-2 h-2 rounded-full ${connectionStatus === 'connected' ? 'bg-emerald-600' : 'bg-amber-600'} animate-pulse`}></span>
+                    {connectionStatus === 'connected' ? 'Connected' : 'Disconnected'}
+                  </span>
+                  | Peers: {peerCount}
                 </p>
                 {persistenceLabel ? <p className="text-xs text-slate-500 mt-1" role="status" aria-live="polite">{persistenceLabel}</p> : null}
+                {connectionStatus === 'disconnected' && (
+                  <p className="text-sm text-amber-700 mt-2 bg-amber-50 border border-amber-200 rounded px-3 py-2">
+                    You are currently disconnected. Changes may not sync to other participants.
+                  </p>
+                )}
               </div>
               <div className="flex flex-wrap gap-2">
                 <button
@@ -1027,8 +1075,14 @@ export default function App(): React.ReactElement {
                   <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">Observers</p>
                   <div className="flex flex-wrap gap-2">
                     {observerParticipants.map((participant) => (
-                      <div key={participant.id} className="px-2.5 py-1.5 rounded-full bg-slate-100 border border-slate-200 text-xs text-slate-700">
-                        {participant.profileIcon} {participant.name}
+                      <div key={participant.id} className={`px-2.5 py-1.5 rounded-full border text-xs flex items-center gap-2 ${
+                        onlineUserIds.has(participant.id)
+                          ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
+                          : 'bg-slate-100 border-slate-300 text-slate-600 opacity-60'
+                      }`}>
+                        {participant.profileIcon} 
+                        <span>{participant.name}</span>
+                        <span className="text-[10px]">{onlineUserIds.has(participant.id) ? '●' : '○'}</span>
                       </div>
                     ))}
                   </div>

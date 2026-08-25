@@ -13,6 +13,8 @@ import type {
   EditVotableInput,
   FinalizeEstimateInput,
   JoinRoomInput,
+  MarkUserOfflineInput,
+  RemoveUserInput,
   RemoveVotableInput,
   ReorderVotableInput,
   ResetVotesInput,
@@ -353,6 +355,73 @@ export function joinAsObserver(ydoc: Y.Doc, input: JoinRoomInput): void {
 }
 
 /**
+ * Mark a user as offline when they disconnect from awareness.
+ * Users remain in the room but show as offline in the UI.
+ */
+export function markUserOffline(ydoc: Y.Doc, userId: string): void {
+  ydoc.transact(() => {
+    const shared = getSharedCollections(ydoc)
+    const user = shared.users.get(userId)
+    
+    if (user) {
+      shared.users.set(userId, {
+        ...user,
+        online: false,
+      })
+    }
+  })
+}
+
+/**
+ * Remove a user from the room (called when user disconnects).
+ * @deprecated Use markUserOffline instead for better UX
+ */
+export function removeUser(ydoc: Y.Doc, userId: string): void {
+  ydoc.transact(() => {
+    const shared = getSharedCollections(ydoc)
+    const room = getRoom(shared)
+
+    if (!room) {
+      return
+    }
+
+    // Don't allow removing the facilitator
+    if (room.facilitator.id === userId) {
+      return
+    }
+
+    // Remove from voters and observers lists
+    const voters = removeUserFromArray(room.voters, userId)
+    const observers = removeUserFromArray(room.observers, userId)
+
+    // Update room state
+    shared.room.set('data', {
+      ...room,
+      voters,
+      observers,
+    })
+
+    // Remove user's votes from this votable
+    const votesToDelete: string[] = []
+    shared.votes.forEach((vote, voteKey) => {
+      if (vote.userId === userId) {
+        votesToDelete.push(voteKey)
+      }
+    })
+    votesToDelete.forEach((key) => shared.votes.delete(key))
+
+    // Mark user as offline in the users map
+    const user = shared.users.get(userId)
+    if (user) {
+      shared.users.set(userId, {
+        ...user,
+        online: false,
+      })
+    }
+  })
+}
+
+/**
  * Dispatch a typed action to mutate CRDT state and return a fresh snapshot.
  */
 export function dispatchCRDTAction(ydoc: Y.Doc, action: CRDTAction): CRDTState | undefined {
@@ -369,6 +438,16 @@ export function dispatchCRDTAction(ydoc: Y.Doc, action: CRDTAction): CRDTState |
     case 'joinAsObserver':
       joinAsObserver(ydoc, action.payload)
       break
+    case 'removeUser': {
+      const payload: RemoveUserInput = action.payload
+      removeUser(ydoc, payload.userId)
+      break
+    }
+    case 'markUserOffline': {
+      const payload: MarkUserOfflineInput = action.payload
+      markUserOffline(ydoc, payload.userId)
+      break
+    }
     case 'addVotable':
       addVotable(ydoc, action.payload)
       break
@@ -567,6 +646,7 @@ export function createWebRTCProvider(
   password?: string
 ): WebrtcProvider {
   const defaultSignalingServer = import.meta.env.VITE_SIGNALING_SERVER ?? 'ws://localhost:4444'
+  
   const signaling = signalingServers.length > 0 ? signalingServers : [defaultSignalingServer]
 
   const provider = new WebrtcProvider(`planning-poker-${roomId}`, ydoc, {
