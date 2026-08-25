@@ -5,6 +5,9 @@ export default function(eleventyConfig) {
   // Copy static assets
   eleventyConfig.addPassthroughCopy("public/**/*");
   
+  // Copy redirect configuration files for deployment
+  eleventyConfig.addPassthroughCopy("_redirects");
+  
   // Don't copy dist files - they're already in dist from Vite/Tailwind builds
   // Just watch them for changes
   eleventyConfig.addWatchTarget("dist/styles.css");

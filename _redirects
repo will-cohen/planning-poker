@@ -1,0 +1,5 @@
+# 11ty Redirect Configuration for path-based room URLs
+# This file is used by Netlify and Vercel for SPA routing
+
+# Route all /app/* paths to /app/index.html for client-side React routing
+/app/*  /app/index.html  200

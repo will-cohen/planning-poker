@@ -1,0 +1,10 @@
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  
+  # Skip rewrite rules for existing files and directories
+  RewriteCond %{REQUEST_FILENAME} !-f
+  RewriteCond %{REQUEST_FILENAME} !-d
+  
+  # Route all /app/* paths to /app/index.html for client-side React routing
+  RewriteRule ^app/(.*)$ /app/index.html [L]
+</IfModule>
