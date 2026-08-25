@@ -24,7 +24,23 @@ export function generateParticipantId(): string {
  * Create a shareable invite URL
  */
 export function createInviteUrl(roomId: string, baseUrl: string = window.location.origin): string {
-  return `${baseUrl}/app/?room=${encodeURIComponent(roomId)}`
+  return `${baseUrl}/app/${encodeURIComponent(roomId)}`
+}
+
+/**
+ * Extract room ID from URL path
+ */
+export function getRoomIdFromUrl(): string {
+  const pathname = window.location.pathname
+  // Match /app/{roomId} pattern
+  const match = pathname.match(/\/app\/([A-Z0-9]{6})\/?$/)
+  if (match && match[1]) {
+    return match[1]
+  }
+  
+  // Fall back to query parameter for backward compatibility
+  const roomId = new URLSearchParams(window.location.search).get('room')
+  return (roomId ?? '').toUpperCase()
 }
 
 /**

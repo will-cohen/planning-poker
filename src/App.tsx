@@ -29,6 +29,7 @@ import {
   generateParticipantId,
   generateProfileIcon,
   generateRoomId,
+  getRoomIdFromUrl,
 } from './utils/room'
 
 interface Session {
@@ -54,10 +55,7 @@ interface RevealState {
 export default function App(): React.ReactElement {
   const [displayName, setDisplayName] = useState('')
   const [roomName, setRoomName] = useState('Sprint Planning')
-  const [joinRoomId, setJoinRoomId] = useState(() => {
-    const roomId = new URLSearchParams(window.location.search).get('room')
-    return (roomId ?? '').toUpperCase()
-  })
+  const [joinRoomId, setJoinRoomId] = useState(() => getRoomIdFromUrl())
   const [joinRole, setJoinRole] = useState<Role>('voter')
 
   const [session, setSession] = useState<Session | null>(null)
@@ -127,6 +125,22 @@ export default function App(): React.ReactElement {
 
     saveLastSession(persisted)
     setRestorableSession(persisted)
+  }, [session])
+
+  useEffect(() => {
+    if (!session) {
+      return
+    }
+
+    // Update the URL to use path-based room ID for bookmarking
+    const inviteUrl = createInviteUrl(session.roomId)
+    const pathMatch = inviteUrl.match(/\/app\/[A-Z0-9]{6}/)
+    if (pathMatch) {
+      const newPath = pathMatch[0]
+      if (window.location.pathname !== newPath) {
+        window.history.replaceState({ roomId: session.roomId }, '', newPath)
+      }
+    }
   }, [session])
 
   useEffect(() => {
@@ -352,6 +366,46 @@ export default function App(): React.ReactElement {
       lookup.set(vote.userId, vote.score)
     })
     return lookup
+  }, [activeVotable])
+
+  const voteStats = useMemo(() => {
+    if (!activeVotable || activeVotable.votes.length === 0) {
+      return null
+    }
+
+    // Convert votes to numeric values for calculation
+    const numericVotes = activeVotable.votes
+      .map((vote) => vote.score)
+      .filter((score) => typeof score === 'number' || !isNaN(Number(score)))
+      .map((score) => Number(score))
+
+    if (numericVotes.length === 0) {
+      return null
+    }
+
+    // Count votes by value
+    const voteCounts = new Map<number, number>()
+    numericVotes.forEach((vote) => {
+      voteCounts.set(vote, (voteCounts.get(vote) ?? 0) + 1)
+    })
+
+    // Calculate average
+    const average = numericVotes.reduce((sum, val) => sum + val, 0) / numericVotes.length
+
+    // Calculate median
+    const sorted = [...numericVotes].sort((a, b) => a - b)
+    const median = sorted.length % 2 === 0
+      ? (sorted[sorted.length / 2 - 1] + sorted[sorted.length / 2]) / 2
+      : sorted[Math.floor(sorted.length / 2)]
+
+    return {
+      voteCounts: Array.from(voteCounts.entries())
+        .sort((a, b) => a[0] - b[0])
+        .map(([value, count]) => ({ value, count })),
+      average: Math.round(average * 10) / 10,
+      median: Math.round(median * 10) / 10,
+      total: activeVotable.votes.length,
+    }
   }, [activeVotable])
 
   const expectedVoters = useMemo(() => {
@@ -866,7 +920,7 @@ export default function App(): React.ReactElement {
                 {snapshot?.votables.map((item, index) => (
                   <div
                     key={item.id}
-                    className={`rounded-lg border p-3 ${item.id === activeVotableId ? 'border-teal-500 bg-teal-50' : 'border-slate-200'}`}
+                    className={`rounded-lg border-2 p-3 transition-all ${item.id === activeVotableId ? 'border-teal-500 bg-teal-100 shadow-md ring-2 ring-teal-300' : 'border-slate-200 bg-white hover:bg-slate-50'}`}
                   >
                     {editingId === item.id ? (
                       <div className="space-y-2">
@@ -916,8 +970,8 @@ export default function App(): React.ReactElement {
                           className="text-left w-full"
                           onClick={() => handleSetActive(item.id)}
                         >
-                          <p className="font-semibold text-slate-900">{item.name}</p>
-                          {item.description ? <p className="text-sm text-slate-600 mt-1">{item.description}</p> : null}
+                          <p className={`font-semibold ${item.id === activeVotableId ? 'text-teal-900 text-lg' : 'text-slate-900'}`}>{item.name}</p>
+                          {item.description ? <p className={`text-sm mt-1 ${item.id === activeVotableId ? 'text-teal-800' : 'text-slate-600'}`}>{item.description}</p> : null}
                           {item.finalEstimate !== undefined ? (
                             <p className="text-xs mt-1 text-emerald-700">Final: {item.finalEstimate}</p>
                           ) : null}
@@ -1047,7 +1101,7 @@ export default function App(): React.ReactElement {
                           {participant.name}
                         </div>
 
-                        <div className="h-16 w-12 rounded-md border-2 border-slate-400 shadow-sm flex items-center justify-center">
+                        <div className="h-16 w-12 rounded-md border-2 border-slate-400 bg-white shadow-sm flex items-center justify-center">
                           {hasVoted ? (
                             revealState.revealed ? (
                               <span className="text-lg font-black text-slate-800">{String(voteValue)}</span>
@@ -1069,6 +1123,42 @@ export default function App(): React.ReactElement {
                   })}
                 </div>
               </div>
+
+              {revealState.revealed && voteStats ? (
+                <div className="rounded-xl border border-emerald-200 bg-gradient-to-b from-emerald-50 to-emerald-100 p-5">
+                  <h3 className="text-lg font-bold text-emerald-900 mb-4">Voting Results</h3>
+                  
+                  <div className="grid grid-cols-3 gap-4 mb-5">
+                    <div className="text-center">
+                      <p className="text-xs text-emerald-700 font-semibold mb-1">Average</p>
+                      <p className="text-2xl font-black text-emerald-900">{voteStats.average}</p>
+                    </div>
+                    <div className="text-center">
+                      <p className="text-xs text-emerald-700 font-semibold mb-1">Median</p>
+                      <p className="text-2xl font-black text-emerald-900">{voteStats.median}</p>
+                    </div>
+                    <div className="text-center">
+                      <p className="text-xs text-emerald-700 font-semibold mb-1">Total Votes</p>
+                      <p className="text-2xl font-black text-emerald-900">{voteStats.total}</p>
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <p className="text-xs text-emerald-700 font-semibold">Vote Distribution</p>
+                    <div className="flex flex-wrap gap-2">
+                      {voteStats.voteCounts.map(({ value, count }) => (
+                        <div
+                          key={value}
+                          className="px-3 py-2 rounded-lg bg-white border border-emerald-200 shadow-sm flex items-center gap-2"
+                        >
+                          <span className="font-bold text-emerald-900">{value}</span>
+                          <span className="text-sm text-emerald-700">×{count}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              ) : null}
 
               {observerParticipants.length > 0 ? (
                 <div>
