@@ -165,7 +165,13 @@ export default function App(): React.ReactElement {
     reducerRef.current = reducer
 
     const refreshSnapshot = (): void => {
-      setSnapshot(reducer.getState())
+      const newSnapshot = reducer.getState()
+      console.log('[CRDT] State updated. Room participants:', {
+        facilitator: newSnapshot?.room.facilitator.name,
+        voters: newSnapshot?.room.voters.map(v => v.name) ?? [],
+        observers: newSnapshot?.room.observers.map(o => o.name) ?? [],
+      })
+      setSnapshot(newSnapshot)
     }
 
     const refreshAwareness = (): void => {
@@ -176,6 +182,7 @@ export default function App(): React.ReactElement {
           users.push(userState)
         }
       })
+      console.log('[Awareness] Updated users:', users)
       setAwarenessUsers(users)
       setPeerCount(getConnectedPeers(provider))
     }
@@ -186,6 +193,7 @@ export default function App(): React.ReactElement {
       role: session.user.role,
       profileIcon: session.user.profileIcon,
     })
+    console.log('[Awareness] Set local user state:', { id: session.user.id, name: session.user.name })
 
     ydoc.on('update', refreshSnapshot)
     provider.awareness.on('change', refreshAwareness)
@@ -216,6 +224,7 @@ export default function App(): React.ReactElement {
     const reducer = reducerRef.current
 
     if (session.mode === 'create' && !hasCreatedRoomRef.current) {
+      console.log('[Room] Creating room:', session.roomId)
       reducer.dispatch({
         type: 'createRoom',
         payload: {
@@ -230,9 +239,13 @@ export default function App(): React.ReactElement {
     }
 
     if (!snapshot?.room || hasJoinedRoomRef.current) {
+      if (!snapshot?.room) {
+        console.log('[Room] Waiting for room state to be created...')
+      }
       return
     }
 
+    console.log('[Room] Joining room as', session.user.role, ':', session.user)
     if (session.user.role === 'observer') {
       reducer.dispatch({ type: 'joinAsObserver', payload: { user: session.user } })
     } else {
