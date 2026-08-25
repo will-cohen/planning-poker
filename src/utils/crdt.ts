@@ -566,7 +566,7 @@ export function createWebRTCProvider(
   signalingServers: string[] = [],
   password?: string
 ): WebrtcProvider {
-  const defaultSignalingServer = 'ws://localhost:4444'
+  const defaultSignalingServer = import.meta.env.VITE_SIGNALING_SERVER ?? 'ws://localhost:4444'
   const signaling = signalingServers.length > 0 ? signalingServers : [defaultSignalingServer]
 
   const provider = new WebrtcProvider(`planning-poker-${roomId}`, ydoc, {
