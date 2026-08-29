@@ -616,6 +616,9 @@ function joinRoomWithRole(ydoc: Y.Doc, user: User, role: Extract<Role, 'voter' |
       voters,
       observers,
     })
+
+    // Sync facilitator and participant references from the authoritative users map
+    syncRoomUsers(shared)
   })
 }
 
