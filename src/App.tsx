@@ -184,11 +184,13 @@ function AppShell(): React.ReactElement {
 
     const refreshSnapshot = (): void => {
       const newSnapshot = reducer.getState()
-      console.log('[CRDT] State updated. Room participants:', {
-        facilitator: newSnapshot?.room.facilitator.name,
-        voters: newSnapshot?.room.voters.map(v => v.name) ?? [],
-        observers: newSnapshot?.room.observers.map(o => o.name) ?? [],
-      })
+      if (newSnapshot?.room) {
+        console.log('[CRDT] State updated. Room participants:', {
+          facilitator: newSnapshot.room.facilitator.name,
+          voters: newSnapshot.room.voters.map(v => v.name),
+          observers: newSnapshot.room.observers.map(o => o.name),
+        })
+      }
       setSnapshot(newSnapshot)
     }
 
@@ -887,6 +889,14 @@ function AppShell(): React.ReactElement {
               <div>
                 <h2 className="text-2xl font-bold text-slate-900">{room?.name ?? `Room ${session?.roomId}`}</h2>
                 <p className="text-slate-600">Room ID: <span className="font-semibold tracking-widest">{session?.roomId}</span></p>
+                {session ? (
+                  <p className="text-sm text-slate-600 mt-1">
+                    You are <span className="font-semibold">{session.user.name}</span>{' '}
+                    <span className="inline-block px-2 py-0.5 rounded-full text-xs font-semibold bg-slate-100 text-slate-700">
+                      {isFacilitator ? 'Facilitator' : currentRole === 'observer' ? 'Observer' : 'Voter'}
+                    </span>
+                  </p>
+                ) : null}
                 <p className="text-sm text-slate-500 mt-1 flex items-center gap-2">
                   Connection: 
                   <span className={`inline-flex items-center gap-1 font-semibold px-2 py-1 rounded ${
@@ -1251,7 +1261,7 @@ function AppShell(): React.ReactElement {
     <div className="min-h-screen bg-[radial-gradient(circle_at_15%_20%,#dbeafe_0%,transparent_35%),radial-gradient(circle_at_90%_10%,#ccfbf1_0%,transparent_35%),linear-gradient(180deg,#f8fafc_0%,#ecfeff_100%)]">
       <header className="bg-white/90 backdrop-blur border-b border-gray-100">
         <div className="max-w-7xl mx-auto py-5 px-4">
-          <a href="/" className="inline-flex items-center gap-2">
+          <a href="/app" className="inline-flex items-center gap-2">
             <span className="text-2xl">🃏</span>
             <span className="text-2xl font-bold text-gray-900">Planning Poker</span>
           </a>

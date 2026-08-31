@@ -31,8 +31,10 @@ import { IndexeddbPersistence } from 'y-indexeddb'
 import { WebrtcProvider } from 'y-webrtc'
 
 export interface SharedCollections {
-  room: Y.Map<Room>
+  room: Y.Map<unknown>
   users: Y.Map<User>
+  voterIds: Y.Array<string>
+  observerIds: Y.Array<string>
   votables: Y.Array<Votable>
   votes: Y.Map<Vote>
   uiState: Y.Map<unknown>
@@ -50,6 +52,16 @@ export interface CRDTReducer {
 
 /**
  * Initialize Yjs document with shared types for Planning Poker
+ *
+ * Room membership (facilitator/voters/observers) and the backlog are modeled
+ * as CRDT-native structures rather than a single opaque `Room` object so that
+ * concurrent edits merge instead of clobbering each other:
+ *   - `room` holds only scalar metadata (id, name, status, createdAt,
+ *     passphrase, facilitatorId). facilitatorId is set once and never changed.
+ *   - `voterIds` / `observerIds` are append-only Y.Array<string> membership
+ *     lists; users are never removed from them, only marked offline.
+ *   - `votables` is an append-only Y.Array<Votable>; "removing" an item sets
+ *     a `deleted` flag instead of splicing it out of the array.
  */
 export function initializeYDoc(config: CRDTConfig): Y.Doc {
   void config
@@ -59,6 +71,8 @@ export function initializeYDoc(config: CRDTConfig): Y.Doc {
   const ymap = ydoc.getMap('shared')
   ymap.set('room', new Y.Map())
   ymap.set('users', new Y.Map())
+  ymap.set('voterIds', new Y.Array())
+  ymap.set('observerIds', new Y.Array())
   ymap.set('votables', new Y.Array())
   ymap.set('votes', new Y.Map())
   ymap.set('uiState', new Y.Map())
@@ -73,8 +87,10 @@ export function getSharedCollections(ydoc: Y.Doc): SharedCollections {
   const shared = ydoc.getMap<Y.AbstractType<unknown>>('shared')
 
   return {
-    room: shared.get('room') as Y.Map<Room>,
+    room: shared.get('room') as Y.Map<unknown>,
     users: shared.get('users') as Y.Map<User>,
+    voterIds: shared.get('voterIds') as Y.Array<string>,
+    observerIds: shared.get('observerIds') as Y.Array<string>,
     votables: shared.get('votables') as Y.Array<Votable>,
     votes: shared.get('votes') as Y.Map<Vote>,
     uiState: shared.get('uiState') as Y.Map<unknown>,
@@ -83,33 +99,43 @@ export function getSharedCollections(ydoc: Y.Doc): SharedCollections {
 
 /**
  * Build a full room object and write it to the CRDT document.
+ *
+ * Room creation is idempotent/set-once for identity fields: if the room
+ * metadata already exists (e.g. a concurrent create from another peer),
+ * this will not overwrite the existing facilitator or metadata.
  */
 export function createRoomState(ydoc: Y.Doc, input: CreateRoomInput): Room {
-  const room: Room = {
-    id: input.id,
-    name: input.name,
-    facilitator: input.facilitator,
-    voters: input.voters ?? [],
-    observers: input.observers ?? [],
-    votables: input.votables ?? [],
-    status: input.status ?? 'active',
-    createdAt: input.createdAt ?? Date.now(),
-    passphrase: input.passphrase,
-  }
+  const createdAt = input.createdAt ?? Date.now()
 
   ydoc.transact(() => {
     const shared = getSharedCollections(ydoc)
 
-    shared.room.set('data', room)
-    indexUser(shared, room.facilitator)
-    room.voters.forEach((user) => indexUser(shared, user))
-    room.observers.forEach((user) => indexUser(shared, user))
+    // Set-once: never overwrite an already-created room or reassign facilitator.
+    if (!shared.room.has('id')) {
+      shared.room.set('id', input.id)
+      shared.room.set('name', input.name)
+      shared.room.set('status', input.status ?? 'active')
+      shared.room.set('createdAt', createdAt)
+      shared.room.set('passphrase', input.passphrase)
+      shared.room.set('facilitatorId', input.facilitator.id)
+    }
 
-    shared.votables.delete(0, shared.votables.length)
-    if (room.votables.length > 0) {
-      shared.votables.insert(0, room.votables)
+    indexUser(shared, input.facilitator)
+    input.voters?.forEach((user) => indexUser(shared, user))
+    input.observers?.forEach((user) => indexUser(shared, user))
+
+    appendIds(shared.voterIds, (input.voters ?? []).map((user) => user.id))
+    appendIds(shared.observerIds, (input.observers ?? []).map((user) => user.id))
+
+    if (shared.votables.length === 0 && input.votables && input.votables.length > 0) {
+      shared.votables.insert(0, input.votables)
     }
   })
+
+  const room = buildRoom(getSharedCollections(ydoc))
+  if (!room) {
+    throw new Error('Failed to create room state')
+  }
 
   return room
 }
@@ -121,7 +147,6 @@ export function upsertUser(ydoc: Y.Doc, user: User): void {
   ydoc.transact(() => {
     const shared = getSharedCollections(ydoc)
     indexUser(shared, user)
-    syncRoomUsers(shared)
   })
 }
 
@@ -142,14 +167,6 @@ export function addVotable(ydoc: Y.Doc, input: CreateVotableInput): Votable {
   ydoc.transact(() => {
     const shared = getSharedCollections(ydoc)
     shared.votables.push([votable])
-
-    const room = getRoom(shared)
-    if (room) {
-      shared.room.set('data', {
-        ...room,
-        votables: [...room.votables, votable],
-      })
-    }
   })
 
   return votable
@@ -168,49 +185,32 @@ export function editVotable(ydoc: Y.Doc, input: EditVotableInput): void {
       link: input.link,
       description: input.description,
     }))
-
-    syncRoomVotables(shared)
   })
 }
 
 /**
- * Remove an item and all associated votes from the CRDT state.
+ * Mark an item as deleted so it is hidden from the UI. Items are never
+ * spliced out of the CRDT array — only tombstoned — so concurrent edits to
+ * the same item never race against its removal.
  */
 export function removeVotable(ydoc: Y.Doc, input: RemoveVotableInput): void {
   ydoc.transact(() => {
     const shared = getSharedCollections(ydoc)
-    const votables = shared.votables.toArray()
-    const index = votables.findIndex((votable) => votable.id === input.votableId)
 
-    if (index === -1) {
-      throw new Error(`Votable ${input.votableId} does not exist`)
-    }
-
-    shared.votables.delete(index, 1)
-
-    const voteKeysToDelete: string[] = []
-    shared.votes.forEach((vote, voteKey) => {
-      if (vote.votableId === input.votableId) {
-        voteKeysToDelete.push(voteKey)
-      }
-    })
-    voteKeysToDelete.forEach((key) => shared.votes.delete(key))
-
-    shared.uiState.delete(`reveal:${input.votableId}`)
+    updateVotable(shared, input.votableId, (votable) => ({
+      ...votable,
+      deleted: true,
+    }))
 
     if (shared.uiState.get('activeVotableId') === input.votableId) {
-      const nextActive = shared.votables.length > 0
-        ? shared.votables.get(Math.min(index, shared.votables.length - 1))?.id
-        : undefined
+      const nextActive = shared.votables.toArray().find((votable) => !votable.deleted && votable.id !== input.votableId)
 
       if (nextActive) {
-        shared.uiState.set('activeVotableId', nextActive)
+        shared.uiState.set('activeVotableId', nextActive.id)
       } else {
         shared.uiState.delete('activeVotableId')
       }
     }
-
-    syncRoomVotables(shared)
   })
 }
 
@@ -237,7 +237,6 @@ export function reorderVotable(ydoc: Y.Doc, input: ReorderVotableInput): void {
 
     shared.votables.delete(0, shared.votables.length)
     shared.votables.insert(0, votables)
-    syncRoomVotables(shared)
   })
 }
 
@@ -269,7 +268,6 @@ export function submitVote(ydoc: Y.Doc, input: SubmitVoteInput): Vote {
 
     const voteKey = `${vote.votableId}:${vote.userId}`
     shared.votes.set(voteKey, vote)
-    syncRoomVotables(shared)
   })
 
   return vote
@@ -308,7 +306,6 @@ export function resetVotes(ydoc: Y.Doc, votableId: string): void {
     voteKeysToDelete.forEach((key) => shared.votes.delete(key))
 
     setRevealState(shared, votableId, false)
-    syncRoomVotables(shared)
   })
 }
 
@@ -324,8 +321,6 @@ export function finalizeEstimate(ydoc: Y.Doc, votableId: string, finalEstimate: 
       finalEstimate,
       status: 'estimated',
     }))
-
-    syncRoomVotables(shared)
   })
 }
 
@@ -372,52 +367,14 @@ export function markUserOffline(ydoc: Y.Doc, userId: string): void {
 }
 
 /**
- * Remove a user from the room (called when user disconnects).
- * @deprecated Use markUserOffline instead for better UX
+ * Mark a user as offline (called when a user disconnects).
+ *
+ * Membership lists (voters/observers) are append-only, so users are never
+ * removed from the room — they are only ever marked offline.
+ * @deprecated Use markUserOffline instead; kept for backward compatibility.
  */
 export function removeUser(ydoc: Y.Doc, userId: string): void {
-  ydoc.transact(() => {
-    const shared = getSharedCollections(ydoc)
-    const room = getRoom(shared)
-
-    if (!room) {
-      return
-    }
-
-    // Don't allow removing the facilitator
-    if (room.facilitator.id === userId) {
-      return
-    }
-
-    // Remove from voters and observers lists
-    const voters = removeUserFromArray(room.voters, userId)
-    const observers = removeUserFromArray(room.observers, userId)
-
-    // Update room state
-    shared.room.set('data', {
-      ...room,
-      voters,
-      observers,
-    })
-
-    // Remove user's votes from this votable
-    const votesToDelete: string[] = []
-    shared.votes.forEach((vote, voteKey) => {
-      if (vote.userId === userId) {
-        votesToDelete.push(voteKey)
-      }
-    })
-    votesToDelete.forEach((key) => shared.votes.delete(key))
-
-    // Mark user as offline in the users map
-    const user = shared.users.get(userId)
-    if (user) {
-      shared.users.set(userId, {
-        ...user,
-        online: false,
-      })
-    }
-  })
+  markUserOffline(ydoc, userId)
 }
 
 /**
@@ -506,7 +463,7 @@ export function createCRDTReducer(ydoc: Y.Doc): CRDTReducer {
  */
 export function getCRDTStateSnapshot(ydoc: Y.Doc): CRDTState | undefined {
   const shared = getSharedCollections(ydoc)
-  const room = getRoom(shared)
+  const room = buildRoom(shared)
 
   if (!room) {
     return undefined
@@ -515,48 +472,64 @@ export function getCRDTStateSnapshot(ydoc: Y.Doc): CRDTState | undefined {
   return {
     room,
     users: new Map(shared.users.entries()),
-    votables: shared.votables.toArray(),
+    votables: shared.votables.toArray().filter((votable) => !votable.deleted),
     votes: new Map(shared.votes.entries()),
     uiState: new Map(shared.uiState.entries()),
   }
 }
 
-function getRoom(shared: SharedCollections): Room | undefined {
-  return shared.room.get('data')
+/**
+ * Reconstruct the full `Room` view from the underlying CRDT-native
+ * collections (scalar metadata, append-only membership lists, users map).
+ */
+function buildRoom(shared: SharedCollections): Room | undefined {
+  if (!shared.room.has('id')) {
+    return undefined
+  }
+
+  const facilitatorId = shared.room.get('facilitatorId') as string
+  const facilitator = shared.users.get(facilitatorId)
+
+  if (!facilitator) {
+    return undefined
+  }
+
+  const voters = shared.voterIds
+    .toArray()
+    .map((id) => shared.users.get(id))
+    .filter((user): user is User => Boolean(user) && user!.role === 'voter')
+  const observers = shared.observerIds
+    .toArray()
+    .map((id) => shared.users.get(id))
+    .filter((user): user is User => Boolean(user) && user!.role === 'observer')
+
+  return {
+    id: shared.room.get('id') as string,
+    name: shared.room.get('name') as string,
+    facilitator,
+    voters,
+    observers,
+    votables: shared.votables.toArray().filter((votable) => !votable.deleted),
+    status: shared.room.get('status') as Room['status'],
+    createdAt: shared.room.get('createdAt') as number,
+    passphrase: shared.room.get('passphrase') as string | undefined,
+  }
 }
 
 function indexUser(shared: SharedCollections, user: User): void {
   shared.users.set(user.id, user)
 }
 
-function syncRoomUsers(shared: SharedCollections): void {
-  const room = getRoom(shared)
-  if (!room) {
-    return
+/**
+ * Append ids to a membership list without ever removing existing entries,
+ * and without introducing duplicates.
+ */
+function appendIds(list: Y.Array<string>, ids: string[]): void {
+  const existing = new Set(list.toArray())
+  const toAdd = ids.filter((id) => id && !existing.has(id))
+  if (toAdd.length > 0) {
+    list.push(toAdd)
   }
-
-  const facilitator = shared.users.get(room.facilitator.id) ?? room.facilitator
-  const voters = room.voters.map((user) => shared.users.get(user.id) ?? user)
-  const observers = room.observers.map((user) => shared.users.get(user.id) ?? user)
-
-  shared.room.set('data', {
-    ...room,
-    facilitator,
-    voters,
-    observers,
-  })
-}
-
-function syncRoomVotables(shared: SharedCollections): void {
-  const room = getRoom(shared)
-  if (!room) {
-    return
-  }
-
-  shared.room.set('data', {
-    ...room,
-    votables: shared.votables.toArray(),
-  })
 }
 
 function updateVotable(
@@ -587,13 +560,13 @@ function setRevealState(shared: SharedCollections, votableId: string, revealed: 
 function joinRoomWithRole(ydoc: Y.Doc, user: User, role: Extract<Role, 'voter' | 'observer'>): void {
   ydoc.transact(() => {
     const shared = getSharedCollections(ydoc)
-    const room = getRoom(shared)
 
-    if (!room) {
+    if (!shared.room.has('id')) {
       throw new Error('Cannot join room before room state is created')
     }
 
-    if (room.facilitator.id === user.id) {
+    const facilitatorId = shared.room.get('facilitatorId') as string
+    if (facilitatorId === user.id) {
       throw new Error('Facilitator cannot be reassigned as voter or observer')
     }
 
@@ -604,37 +577,17 @@ function joinRoomWithRole(ydoc: Y.Doc, user: User, role: Extract<Role, 'voter' |
 
     indexUser(shared, updatedUser)
 
-    const voters = role === 'voter'
-      ? upsertUserArray(room.voters, updatedUser)
-      : removeUserFromArray(room.voters, updatedUser.id)
-    const observers = role === 'observer'
-      ? upsertUserArray(room.observers, updatedUser)
-      : removeUserFromArray(room.observers, updatedUser.id)
-
-    shared.room.set('data', {
-      ...room,
-      voters,
-      observers,
-    })
-
-    // Sync facilitator and participant references from the authoritative users map
-    syncRoomUsers(shared)
+    // Append-only: a user's id is added to whichever list matches their
+    // current role. If they switch roles later, their id may end up in both
+    // lists, but buildRoom() disambiguates using the authoritative role
+    // stored on the user record, so membership always reflects the latest
+    // role without ever deleting entries from either list.
+    if (role === 'voter') {
+      appendIds(shared.voterIds, [updatedUser.id])
+    } else {
+      appendIds(shared.observerIds, [updatedUser.id])
+    }
   })
-}
-
-function upsertUserArray(users: User[], user: User): User[] {
-  const existingIndex = users.findIndex((candidate) => candidate.id === user.id)
-  if (existingIndex === -1) {
-    return [...users, user]
-  }
-
-  const copy = [...users]
-  copy[existingIndex] = user
-  return copy
-}
-
-function removeUserFromArray(users: User[], userId: string): User[] {
-  return users.filter((user) => user.id !== userId)
 }
 
 /**

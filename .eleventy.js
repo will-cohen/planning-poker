@@ -35,6 +35,17 @@ export default function(eleventyConfig) {
     }
     return `/assets/${viteManifest[name].file}`
   })
+
+  eleventyConfig.setServerOptions({
+  middleware: [
+    (req, res, next) => {
+      if (req.url.startsWith('/app/') && !req.url.includes('.')) {
+        req.url = '/app/index.html'
+      }
+      next()
+    },
+  ],
+})
   
   return {
     dir: {

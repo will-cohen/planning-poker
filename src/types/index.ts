@@ -25,6 +25,7 @@ export interface Votable {
   votes: Vote[]
   finalEstimate?: string | number
   status: 'pending' | 'estimating' | 'estimated'
+  deleted?: boolean
 }
 
 export interface Room {
