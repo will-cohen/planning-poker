@@ -2,6 +2,9 @@
 
 Remote Planning Poker Web App for distributed software teams to run estimation sessions with real-time collaboration.
 
+🔗 Live app: [https://wills-planning-poker.netlify.app/](https://wills-planning-poker.netlify.app/)
+📦 Source: [https://github.com/will-cohen/planning-poker](https://github.com/will-cohen/planning-poker)
+
 ## Architecture
 
 This project uses a hybrid architecture:
@@ -253,4 +256,4 @@ See [PLANNING_DOCUMENT.md](./PLANNING_DOCUMENT.md) for full project vision, requ
 
 ## License
 
-Private project - Planning Poker Web App
+MIT License - see [LICENSE](./LICENSE) for details. Planning Poker is free and open source; contributions and forks are welcome.

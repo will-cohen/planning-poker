@@ -188,9 +188,32 @@ title: Planning Poker
   </div>
 </section>
 
+<section id="open-source" class="border-y border-gray-100 bg-gray-50">
+  <div class="max-w-7xl mx-auto px-4 py-20 md:py-28 text-center">
+    <div class="text-4xl mb-4">🧑‍💻</div>
+    <h2 class="text-3xl md:text-4xl font-bold text-gray-900">Free and open source</h2>
+    <p class="mt-4 text-lg text-gray-600 max-w-2xl mx-auto">
+      Planning Poker is MIT-licensed and open source. Read the code, self-host it, or contribute a feature —
+      everything is on GitHub.
+    </p>
+    <div class="mt-8">
+      <a
+        href="https://github.com/will-cohen/planning-poker"
+        target="_blank"
+        rel="noopener noreferrer"
+        class="inline-flex items-center justify-center gap-2 rounded-xl border border-gray-300 bg-white px-8 py-4 text-lg font-semibold text-gray-700 hover:bg-gray-50 transition-colors"
+      >
+        View the Source on GitHub
+        <span aria-hidden="true">&rarr;</span>
+      </a>
+    </div>
+  </div>
+</section>
+
 <section class="max-w-7xl mx-auto px-4 py-20 md:py-28">
   <div class="rounded-3xl bg-gradient-to-br from-primary to-blue-600 px-8 py-16 md:px-16 md:py-20 text-center shadow-xl">
     <h2 class="text-3xl md:text-4xl font-extrabold text-white">Ready to run your next estimation session?</h2>
+
     <p class="mt-4 text-lg text-blue-100 max-w-xl mx-auto">
       Jump straight into the app and join your team's room in seconds. No signup required.
     </p>
