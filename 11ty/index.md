@@ -33,7 +33,10 @@ title: Planning Poker
           See How It Works
         </a>
       </div>
-      <p class="mt-4 text-sm text-gray-500">Takes 10 seconds. No account, no credit card, no installs.</p>
+      <p class="mt-4 text-sm text-gray-500">
+        Takes 10 seconds. No account, no credit card, no installs.
+        Facilitating? <a href="/app/create-room" class="font-semibold text-primary hover:text-blue-700">Create a room instead &rarr;</a>
+      </p>
     </div>
   </div>
 </section>
@@ -157,7 +160,7 @@ title: Planning Poker
   <div class="grid gap-12">
     <figure>
       <img
-        src="/img/stock-global-network.png"
+        src="/assets/img/stock-global-network.png"
         alt="Global network illustrating distributed peer-to-peer connections across the world"
         class="rounded-2xl shadow-lg w-full h-auto object-cover"
         loading="lazy"
@@ -189,15 +192,21 @@ title: Planning Poker
   <div class="rounded-3xl bg-gradient-to-br from-primary to-blue-600 px-8 py-16 md:px-16 md:py-20 text-center shadow-xl">
     <h2 class="text-3xl md:text-4xl font-extrabold text-white">Ready to run your next estimation session?</h2>
     <p class="mt-4 text-lg text-blue-100 max-w-xl mx-auto">
-      Jump straight into the app — create a room and invite your team in seconds. No signup required.
+      Jump straight into the app and join your team's room in seconds. No signup required.
     </p>
-    <div class="mt-8">
+    <div class="mt-8 flex flex-col sm:flex-row justify-center gap-4">
       <a
         href="/app/"
         class="inline-flex items-center justify-center gap-2 rounded-xl bg-white px-8 py-4 text-lg font-semibold text-primary shadow-lg hover:bg-blue-50 transition-colors"
       >
-        Launch Planning Poker
+        Join a Room
         <span aria-hidden="true">&rarr;</span>
+      </a>
+      <a
+        href="/app/create-room"
+        class="inline-flex items-center justify-center gap-2 rounded-xl border border-blue-200 px-8 py-4 text-lg font-semibold text-white hover:bg-white/10 transition-colors"
+      >
+        Create a Room
       </a>
     </div>
   </div>

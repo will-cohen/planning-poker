@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom'
 
 import {
   CARD_VALUES,
@@ -29,7 +30,7 @@ import {
   generateParticipantId,
   generateProfileIcon,
   generateRoomId,
-  getRoomIdFromUrl,
+  isValidRoomId,
 } from './utils/room'
 
 interface Session {
@@ -52,11 +53,17 @@ interface RevealState {
   revealedAt?: number
 }
 
-export default function App(): React.ReactElement {
+function AppShell(): React.ReactElement {
+  const navigate = useNavigate()
+  const location = useLocation()
+  const params = useParams<{ roomId?: string }>()
+  const routeRoomId = params.roomId && isValidRoomId(params.roomId.toUpperCase()) ? params.roomId.toUpperCase() : ''
+
   const [displayName, setDisplayName] = useState('')
   const [roomName, setRoomName] = useState('Sprint Planning')
-  const [joinRoomId, setJoinRoomId] = useState(() => getRoomIdFromUrl())
+  const [joinRoomId, setJoinRoomId] = useState(() => routeRoomId)
   const [joinRole, setJoinRole] = useState<Role>('voter')
+  const lobbyView: 'join' | 'create' = location.pathname === '/create-room' ? 'create' : 'join'
 
   const [session, setSession] = useState<Session | null>(null)
   const [restorableSession, setRestorableSession] = useState<StoredSession | null>(null)
@@ -133,15 +140,11 @@ export default function App(): React.ReactElement {
     }
 
     // Update the URL to use path-based room ID for bookmarking
-    const inviteUrl = createInviteUrl(session.roomId)
-    const pathMatch = inviteUrl.match(/\/app\/[A-Z0-9]{6}/)
-    if (pathMatch) {
-      const newPath = pathMatch[0]
-      if (window.location.pathname !== newPath) {
-        window.history.replaceState({ roomId: session.roomId }, '', newPath)
-      }
+    const newPath = `/${session.roomId}`
+    if (location.pathname !== newPath) {
+      navigate(newPath, { replace: true })
     }
-  }, [session])
+  }, [session, location.pathname, navigate])
 
   useEffect(() => {
     if (!session) {
@@ -474,6 +477,16 @@ export default function App(): React.ReactElement {
     joinedAt: Date.now(),
   })
 
+  const navigateToCreateRoom = (): void => {
+    navigate('/create-room')
+    setErrorMessage(null)
+  }
+
+  const navigateToJoinRoom = (): void => {
+    navigate('/')
+    setErrorMessage(null)
+  }
+
   const handleCreateRoom = (): void => {
     const trimmedName = displayName.trim()
     const trimmedRoomName = roomName.trim()
@@ -694,6 +707,7 @@ export default function App(): React.ReactElement {
     setSnapshot(undefined)
     setErrorMessage(null)
     setExportMessage(null)
+    navigate('/')
   }
 
   const restoreSession = (): void => {
@@ -722,9 +736,9 @@ export default function App(): React.ReactElement {
   }
 
   const renderLobby = (): React.ReactElement => (
-    <main className="max-w-5xl mx-auto px-4 py-10 grid lg:grid-cols-2 gap-8">
+    <main className="max-w-2xl mx-auto px-4 py-10">
       {restorableSession ? (
-        <section className="lg:col-span-2 bg-amber-50 border border-amber-200 rounded-xl p-4 flex flex-wrap gap-3 justify-between items-center" aria-live="polite">
+        <section className="mb-6 bg-amber-50 border border-amber-200 rounded-xl p-4 flex flex-wrap gap-3 justify-between items-center" aria-live="polite">
           <div>
             <p className="font-semibold text-amber-900">Resume previous session</p>
             <p className="text-sm text-amber-800">{restorableSession.roomName ?? restorableSession.roomId} as {restorableSession.user.name}</p>
@@ -740,89 +754,111 @@ export default function App(): React.ReactElement {
         </section>
       ) : null}
 
-      <section className="bg-white rounded-xl shadow-lg border border-slate-200 p-6">
-        <h2 className="text-2xl font-bold text-slate-900">Create Room</h2>
-        <p className="text-slate-600 mt-2">Start a new planning poker session as facilitator.</p>
-        <div className="mt-5 space-y-3">
-          <label className="block">
-            <span className="text-sm text-slate-700">Your Name</span>
-            <input
-              aria-label="Create room display name"
-              value={displayName}
-              onChange={(event) => setDisplayName(event.target.value)}
-              className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2"
-              placeholder="Alex"
-            />
-          </label>
-          <label className="block">
-            <span className="text-sm text-slate-700">Room Name</span>
-            <input
-              aria-label="Create room name"
-              value={roomName}
-              onChange={(event) => setRoomName(event.target.value)}
-              className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2"
-              placeholder="Sprint Planning"
-            />
-          </label>
-        </div>
-        <button
-          type="button"
-          onClick={handleCreateRoom}
-          aria-label="Create planning poker room"
-          className="mt-5 w-full bg-slate-900 hover:bg-slate-700 text-white rounded-lg px-4 py-2 font-semibold"
-        >
-          Create Room
-        </button>
-      </section>
-
-      <section className="bg-white rounded-xl shadow-lg border border-slate-200 p-6">
-        <h2 className="text-2xl font-bold text-slate-900">Join Room</h2>
-        <p className="text-slate-600 mt-2">Join as voter or observer.</p>
-        <div className="mt-5 space-y-3">
-          <label className="block">
-            <span className="text-sm text-slate-700">Your Name</span>
-            <input
-              aria-label="Join room display name"
-              value={displayName}
-              onChange={(event) => setDisplayName(event.target.value)}
-              className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2"
-              placeholder="Sam"
-            />
-          </label>
-          <label className="block">
-            <span className="text-sm text-slate-700">Room ID</span>
-            <input
-              aria-label="Room ID to join"
-              value={joinRoomId}
-              onChange={(event) => setJoinRoomId(event.target.value.toUpperCase())}
-              className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 tracking-widest"
-              placeholder="AB12CD"
-            />
-          </label>
-          <label className="block">
-            <span className="text-sm text-slate-700">Role</span>
-            <select
-              aria-label="Role when joining room"
-              value={joinRole}
-              onChange={(event) => setJoinRole(event.target.value as Role)}
-              className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2"
+      {lobbyView === 'create' ? (
+        <section className="bg-white rounded-2xl shadow-lg border border-gray-100 p-6">
+          <button
+            type="button"
+            onClick={navigateToJoinRoom}
+            className="text-sm font-medium text-primary hover:text-blue-700"
+            aria-label="Back to join a room"
+          >
+            &larr; Back to join a room
+          </button>
+          <h2 className="text-2xl font-bold text-gray-900 mt-3">Create a New Room</h2>
+          <p className="text-gray-600 mt-2">Start a new planning poker session as facilitator.</p>
+          <div className="mt-5 space-y-3">
+            <label className="block">
+              <span className="text-sm text-gray-700">Your Name</span>
+              <input
+                aria-label="Create room display name"
+                value={displayName}
+                onChange={(event) => setDisplayName(event.target.value)}
+                className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary"
+                placeholder="Alex"
+              />
+            </label>
+            <label className="block">
+              <span className="text-sm text-gray-700">Room Name</span>
+              <input
+                aria-label="Create room name"
+                value={roomName}
+                onChange={(event) => setRoomName(event.target.value)}
+                className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary"
+                placeholder="Sprint Planning"
+              />
+            </label>
+          </div>
+          <button
+            type="button"
+            onClick={handleCreateRoom}
+            aria-label="Create planning poker room"
+            className="mt-5 w-full bg-primary hover:bg-blue-600 text-white rounded-lg px-4 py-2.5 font-semibold transition-colors"
+          >
+            Create Room
+          </button>
+        </section>
+      ) : (
+        <section className="bg-white rounded-2xl shadow-lg border border-gray-100 p-6">
+          <h2 className="text-2xl font-bold text-gray-900">Join a Room</h2>
+          <p className="text-gray-600 mt-2">Enter the room ID your facilitator shared with you.</p>
+          <div className="mt-5 space-y-3">
+            <label className="block">
+              <span className="text-sm text-gray-700">Your Name</span>
+              <input
+                aria-label="Join room display name"
+                value={displayName}
+                onChange={(event) => setDisplayName(event.target.value)}
+                className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary"
+                placeholder="Sam"
+              />
+            </label>
+            <label className="block">
+              <span className="text-sm text-gray-700">Room ID</span>
+              <input
+                aria-label="Room ID to join"
+                value={joinRoomId}
+                onChange={(event) => setJoinRoomId(event.target.value.toUpperCase())}
+                className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 tracking-widest focus:outline-none focus:ring-2 focus:ring-primary"
+                placeholder="AB12CD"
+              />
+            </label>
+            <label className="block">
+              <span className="text-sm text-gray-700">Role</span>
+              <select
+                aria-label="Role when joining room"
+                value={joinRole}
+                onChange={(event) => setJoinRole(event.target.value as Role)}
+                className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary"
+              >
+                <option value="voter">Voter</option>
+                <option value="observer">Observer</option>
+              </select>
+            </label>
+          </div>
+          <button
+            type="button"
+            onClick={handleJoinRoom}
+            aria-label="Join planning poker room"
+            className="mt-5 w-full bg-primary hover:bg-blue-600 text-white rounded-lg px-4 py-2.5 font-semibold transition-colors"
+          >
+            Join Room
+          </button>
+          <p className="mt-4 text-center text-sm text-gray-600">
+            Facilitating this session?{' '}
+            <button
+              type="button"
+              onClick={navigateToCreateRoom}
+              className="font-semibold text-primary hover:text-blue-700"
+              aria-label="Create a new room instead"
             >
-              <option value="voter">Voter</option>
-              <option value="observer">Observer</option>
-            </select>
-          </label>
-        </div>
-        <button
-          type="button"
-          onClick={handleJoinRoom}
-          aria-label="Join planning poker room"
-          className="mt-5 w-full bg-teal-700 hover:bg-teal-600 text-white rounded-lg px-4 py-2 font-semibold"
-        >
-          Join Room
-        </button>
-      </section>
+              Create a new room
+            </button>
+          </p>
+        </section>
+      )}
     </main>
   )
+
 
   const renderRoom = (): React.ReactElement => {
     const room = snapshot?.room
@@ -1213,19 +1249,28 @@ export default function App(): React.ReactElement {
 
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_15%_20%,#dbeafe_0%,transparent_35%),radial-gradient(circle_at_90%_10%,#ccfbf1_0%,transparent_35%),linear-gradient(180deg,#f8fafc_0%,#ecfeff_100%)]">
-      <header className="bg-white/90 backdrop-blur border-b border-slate-200">
+      <header className="bg-white/90 backdrop-blur border-b border-gray-100">
         <div className="max-w-7xl mx-auto py-5 px-4">
-          <h1 className="text-3xl font-black text-slate-900">
-            Planning Poker
-          </h1>
-          <p className="text-slate-600 mt-1">
-            Phase 2 hardening: persistence, export, accessibility, analytics, and performance tuning.
-          </p>
+          <a href="/" className="inline-flex items-center gap-2">
+            <span className="text-2xl">🃏</span>
+            <span className="text-2xl font-bold text-gray-900">Planning Poker</span>
+          </a>
           {errorMessage ? <p className="text-rose-700 mt-2 text-sm" role="alert">{errorMessage}</p> : null}
         </div>
       </header>
 
       {session ? renderRoom() : renderLobby()}
     </div>
+  )
+}
+
+export default function App(): React.ReactElement {
+  return (
+    <Routes>
+      <Route path="/" element={<AppShell />} />
+      <Route path="/create-room" element={<AppShell />} />
+      <Route path="/:roomId" element={<AppShell />} />
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
   )
 }
