@@ -79,11 +79,11 @@ export function initializeYDoc(config: CRDTConfig): Y.Doc {
     if (origin === 'init') return
     const shared = getSharedCollections(ydoc)
     console.log('[CRDT] Y.Doc update received:', {
-      roomHasId: shared.room.has('id'),
-      usersCount: shared.users.size,
-      votablesCount: shared.votables.length,
-      votersCount: shared.voterIds.length,
-      observersCount: shared.observerIds.length,
+      roomHasId: shared.room?.has('id') ?? false,
+      usersCount: shared.users?.size ?? 0,
+      votablesCount: shared.votables?.length ?? 0,
+      votersCount: shared.voterIds?.length ?? 0,
+      observersCount: shared.observerIds?.length ?? 0,
     })
   })
 
@@ -146,7 +146,7 @@ export function createRoomState(ydoc: Y.Doc, input: CreateRoomInput): Room {
     const shared = getSharedCollections(ydoc)
 
     // Set-once: never overwrite an already-created room or reassign facilitator.
-    if (!shared.room.has('id')) {
+    if (!shared.room || !shared.room.has('id')) {
       console.log('[CRDT] Creating new room metadata')
       shared.room.set('id', input.id)
       shared.room.set('name', input.name)
@@ -162,10 +162,10 @@ export function createRoomState(ydoc: Y.Doc, input: CreateRoomInput): Room {
     input.voters?.forEach((user) => indexUser(shared, user))
     input.observers?.forEach((user) => indexUser(shared, user))
 
-    appendIds(shared.voterIds, (input.voters ?? []).map((user) => user.id))
-    appendIds(shared.observerIds, (input.observers ?? []).map((user) => user.id))
+    if (shared.voterIds) appendIds(shared.voterIds, (input.voters ?? []).map((user) => user.id))
+    if (shared.observerIds) appendIds(shared.observerIds, (input.observers ?? []).map((user) => user.id))
 
-    if (shared.votables.length === 0 && input.votables && input.votables.length > 0) {
+    if (shared.votables && shared.votables.length === 0 && input.votables && input.votables.length > 0) {
       console.log('[CRDT] Inserting', input.votables.length, 'votables into empty array')
       shared.votables.insert(0, input.votables)
     }
@@ -296,7 +296,7 @@ export function submitVote(ydoc: Y.Doc, input: SubmitVoteInput): Vote {
 
   ydoc.transact(() => {
     const shared = getSharedCollections(ydoc)
-    if (!shared.users.has(vote.userId)) {
+    if (!shared.users || !shared.users.has(vote.userId)) {
       throw new Error(`Cannot submit vote: user ${vote.userId} does not exist`)
     }
 
@@ -529,8 +529,8 @@ export function getCRDTStateSnapshot(ydoc: Y.Doc): CRDTState | undefined {
  * collections (scalar metadata, append-only membership lists, users map).
  */
 function buildRoom(shared: SharedCollections): Room | undefined {
-  if (!shared.room.has('id')) {
-    console.log('[CRDT] buildRoom: room.id not found - room object keys:', Array.from(shared.room.keys()))
+  if (!shared.room || !shared.room.has('id')) {
+    console.log('[CRDT] buildRoom: room.id not found - room object keys:', shared.room ? Array.from(shared.room.keys()) : [])
     return undefined
   }
 
@@ -611,7 +611,7 @@ function joinRoomWithRole(ydoc: Y.Doc, user: User, role: Extract<Role, 'voter' |
   ydoc.transact(() => {
     const shared = getSharedCollections(ydoc)
 
-    if (!shared.room.has('id')) {
+    if (!shared.room || !shared.room.has('id')) {
       throw new Error('Cannot join room before room state is created')
     }
 
@@ -635,9 +635,9 @@ function joinRoomWithRole(ydoc: Y.Doc, user: User, role: Extract<Role, 'voter' |
     // lists, but buildRoom() disambiguates using the authoritative role
     // stored on the user record, so membership always reflects the latest
     // role without ever deleting entries from either list.
-    if (role === 'voter') {
+    if (role === 'voter' && shared.voterIds) {
       appendIds(shared.voterIds, [updatedUser.id])
-    } else {
+    } else if (shared.observerIds) {
       appendIds(shared.observerIds, [updatedUser.id])
     }
 
