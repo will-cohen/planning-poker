@@ -148,6 +148,7 @@ function AppShell(): React.ReactElement {
 
   useEffect(() => {
     if (!session) {
+      console.log('[Session] Cleaning up - session is null')
       reducerRef.current = null
       ydocRef.current = null
       providerRef.current = null
@@ -159,6 +160,7 @@ function AppShell(): React.ReactElement {
       return
     }
 
+    console.log('[Session] Setting up session:', { mode: session.mode, roomId: session.roomId, user: session.user.name })
     hasCreatedRoomRef.current = false
     hasJoinedRoomRef.current = false
 
@@ -189,7 +191,10 @@ function AppShell(): React.ReactElement {
           facilitator: newSnapshot.room.facilitator.name,
           voters: newSnapshot.room.voters.map(v => v.name),
           observers: newSnapshot.room.observers.map(o => o.name),
+          votables: newSnapshot.votables.length,
         })
+      } else {
+        console.log('[CRDT] State updated but room is undefined! Previous room:', snapshot?.room?.name)
       }
       setSnapshot(newSnapshot)
     }

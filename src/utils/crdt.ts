@@ -64,18 +64,41 @@ export interface CRDTReducer {
  *     a `deleted` flag instead of splicing it out of the array.
  */
 export function initializeYDoc(config: CRDTConfig): Y.Doc {
+  console.log('[CRDT] initializeYDoc called for roomId:', config.roomId)
   void config
   const ydoc = new Y.Doc()
 
   // Create shared types for room state
+  // IMPORTANT: Only create collections if they don't exist. When a peer joins and loads
+  // from IndexedDB or WebRTC sync, these collections will already exist. Creating new
+  // empty ones here would overwrite synced state and cause data loss.
   const ymap = ydoc.getMap('shared')
-  ymap.set('room', new Y.Map())
-  ymap.set('users', new Y.Map())
-  ymap.set('voterIds', new Y.Array())
-  ymap.set('observerIds', new Y.Array())
-  ymap.set('votables', new Y.Array())
-  ymap.set('votes', new Y.Map())
-  ymap.set('uiState', new Y.Map())
+  
+  if (!ymap.has('room')) {
+    console.log('[CRDT] Creating new collections (no existing state found)')
+    ymap.set('room', new Y.Map())
+    ymap.set('users', new Y.Map())
+    ymap.set('voterIds', new Y.Array())
+    ymap.set('observerIds', new Y.Array())
+    ymap.set('votables', new Y.Array())
+    ymap.set('votes', new Y.Map())
+    ymap.set('uiState', new Y.Map())
+  } else {
+    console.log('[CRDT] Collections already exist, skipping creation (state from previous peer or IndexedDB)')
+  }
+
+  // Log when data is added/changed
+  ydoc.on('update', (update: Uint8Array, origin: any) => {
+    if (origin === 'init') return
+    const shared = getSharedCollections(ydoc)
+    console.log('[CRDT] Y.Doc update received:', {
+      roomHasId: shared.room.has('id'),
+      usersCount: shared.users.size,
+      votablesCount: shared.votables.length,
+      votersCount: shared.voterIds.length,
+      observersCount: shared.observerIds.length,
+    })
+  })
 
   return ydoc
 }
@@ -86,7 +109,7 @@ export function initializeYDoc(config: CRDTConfig): Y.Doc {
 export function getSharedCollections(ydoc: Y.Doc): SharedCollections {
   const shared = ydoc.getMap<Y.AbstractType<unknown>>('shared')
 
-  return {
+  const collections = {
     room: shared.get('room') as Y.Map<unknown>,
     users: shared.get('users') as Y.Map<User>,
     voterIds: shared.get('voterIds') as Y.Array<string>,
@@ -95,6 +118,13 @@ export function getSharedCollections(ydoc: Y.Doc): SharedCollections {
     votes: shared.get('votes') as Y.Map<Vote>,
     uiState: shared.get('uiState') as Y.Map<unknown>,
   }
+
+  // Check if collections are missing (indicates potential sync/reset issue)
+  if (!collections.room || !collections.votables) {
+    console.error('[CRDT] Missing critical collections! room:', !!collections.room, 'votables:', !!collections.votables, 'shared map keys:', Array.from(shared.keys()))
+  }
+
+  return collections
 }
 
 /**
@@ -106,18 +136,22 @@ export function getSharedCollections(ydoc: Y.Doc): SharedCollections {
  */
 export function createRoomState(ydoc: Y.Doc, input: CreateRoomInput): Room {
   const createdAt = input.createdAt ?? Date.now()
+  console.log('[CRDT] createRoomState called with roomId:', input.id, 'facilitator:', input.facilitator.name, 'votables:', input.votables?.length ?? 0)
 
   ydoc.transact(() => {
     const shared = getSharedCollections(ydoc)
 
     // Set-once: never overwrite an already-created room or reassign facilitator.
     if (!shared.room.has('id')) {
+      console.log('[CRDT] Creating new room in CRDT')
       shared.room.set('id', input.id)
       shared.room.set('name', input.name)
       shared.room.set('status', input.status ?? 'active')
       shared.room.set('createdAt', createdAt)
       shared.room.set('passphrase', input.passphrase)
       shared.room.set('facilitatorId', input.facilitator.id)
+    } else {
+      console.log('[CRDT] Room already exists, skipping creation (expected for second peer)')
     }
 
     indexUser(shared, input.facilitator)
@@ -128,6 +162,7 @@ export function createRoomState(ydoc: Y.Doc, input: CreateRoomInput): Room {
     appendIds(shared.observerIds, (input.observers ?? []).map((user) => user.id))
 
     if (shared.votables.length === 0 && input.votables && input.votables.length > 0) {
+      console.log('[CRDT] Inserting', input.votables.length, 'votables into empty array')
       shared.votables.insert(0, input.votables)
     }
   })
@@ -137,6 +172,7 @@ export function createRoomState(ydoc: Y.Doc, input: CreateRoomInput): Room {
     throw new Error('Failed to create room state')
   }
 
+  console.log('[CRDT] Room created successfully with', room.voters.length, 'voters,', room.observers.length, 'observers,', room.votables.length, 'votables')
   return room
 }
 
@@ -166,7 +202,9 @@ export function addVotable(ydoc: Y.Doc, input: CreateVotableInput): Votable {
 
   ydoc.transact(() => {
     const shared = getSharedCollections(ydoc)
+    const votablesCountBefore = shared.votables.length
     shared.votables.push([votable])
+    console.log('[CRDT] addVotable:', input.name, '- votables count:', votablesCountBefore, '->', shared.votables.length)
   })
 
   return votable
@@ -469,10 +507,14 @@ export function getCRDTStateSnapshot(ydoc: Y.Doc): CRDTState | undefined {
     return undefined
   }
 
+  const votablesInArray = shared.votables.toArray()
+  const votablesActive = votablesInArray.filter((votable) => !votable.deleted)
+  console.log('[CRDT] getCRDTStateSnapshot - votables in array:', votablesInArray.length, 'active (not deleted):', votablesActive.length)
+
   return {
     room,
     users: new Map(shared.users.entries()),
-    votables: shared.votables.toArray().filter((votable) => !votable.deleted),
+    votables: votablesActive,
     votes: new Map(shared.votes.entries()),
     uiState: new Map(shared.uiState.entries()),
   }
@@ -484,6 +526,7 @@ export function getCRDTStateSnapshot(ydoc: Y.Doc): CRDTState | undefined {
  */
 function buildRoom(shared: SharedCollections): Room | undefined {
   if (!shared.room.has('id')) {
+    console.log('[CRDT] buildRoom: room.id not found - room object keys:', Array.from(shared.room.keys()))
     return undefined
   }
 
@@ -491,6 +534,7 @@ function buildRoom(shared: SharedCollections): Room | undefined {
   const facilitator = shared.users.get(facilitatorId)
 
   if (!facilitator) {
+    console.log('[CRDT] buildRoom: facilitator not found - facilitatorId:', facilitatorId, 'available users:', Array.from(shared.users.keys()).length)
     return undefined
   }
 
@@ -528,7 +572,9 @@ function appendIds(list: Y.Array<string>, ids: string[]): void {
   const existing = new Set(list.toArray())
   const toAdd = ids.filter((id) => id && !existing.has(id))
   if (toAdd.length > 0) {
+    const countBefore = list.length
     list.push(toAdd)
+    console.log('[CRDT] appendIds added', toAdd.length, 'ids. Count:', countBefore, '->', list.length)
   }
 }
 
@@ -565,6 +611,9 @@ function joinRoomWithRole(ydoc: Y.Doc, user: User, role: Extract<Role, 'voter' |
       throw new Error('Cannot join room before room state is created')
     }
 
+    const votablesCountBefore = shared.votables.length
+    console.log('[CRDT] joinRoomWithRole:', user.name, 'as', role, '- votables before:', votablesCountBefore)
+
     const facilitatorId = shared.room.get('facilitatorId') as string
     if (facilitatorId === user.id) {
       throw new Error('Facilitator cannot be reassigned as voter or observer')
@@ -587,6 +636,9 @@ function joinRoomWithRole(ydoc: Y.Doc, user: User, role: Extract<Role, 'voter' |
     } else {
       appendIds(shared.observerIds, [updatedUser.id])
     }
+
+    const votablesCountAfter = shared.votables.length
+    console.log('[CRDT] joinRoomWithRole complete - votables after:', votablesCountAfter, 'changed:', votablesCountBefore !== votablesCountAfter)
   })
 }
 
