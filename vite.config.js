@@ -13,6 +13,7 @@ export default defineConfig({
     emptyOutDir: false,
     lib: false,
     manifest: true,
+    sourcemap: true,
     rollupOptions: {
       input: 'src/main.tsx',
       output: {
