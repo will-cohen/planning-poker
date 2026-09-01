@@ -62,30 +62,17 @@ export interface CRDTReducer {
  *     lists; users are never removed from them, only marked offline.
  *   - `votables` is an append-only Y.Array<Votable>; "removing" an item sets
  *     a `deleted` flag instead of splicing it out of the array.
+ *
+ * IMPORTANT: Do NOT create collections here. The Y.Doc is created empty and collections
+ * are populated by:
+ *   1. Facilitator: createRoomState() creates collections on room creation
+ *   2. Other peers: WebRTC/IndexedDB sync provides collections from peers
+ * Creating empty collections here would overwrite synced state and cause data loss.
  */
 export function initializeYDoc(config: CRDTConfig): Y.Doc {
   console.log('[CRDT] initializeYDoc called for roomId:', config.roomId)
   void config
   const ydoc = new Y.Doc()
-
-  // Create shared types for room state
-  // IMPORTANT: Only create collections if they don't exist. When a peer joins and loads
-  // from IndexedDB or WebRTC sync, these collections will already exist. Creating new
-  // empty ones here would overwrite synced state and cause data loss.
-  const ymap = ydoc.getMap('shared')
-  
-  if (!ymap.has('room')) {
-    console.log('[CRDT] Creating new collections (no existing state found)')
-    ymap.set('room', new Y.Map())
-    ymap.set('users', new Y.Map())
-    ymap.set('voterIds', new Y.Array())
-    ymap.set('observerIds', new Y.Array())
-    ymap.set('votables', new Y.Array())
-    ymap.set('votes', new Y.Map())
-    ymap.set('uiState', new Y.Map())
-  } else {
-    console.log('[CRDT] Collections already exist, skipping creation (state from previous peer or IndexedDB)')
-  }
 
   // Log when data is added/changed
   ydoc.on('update', (update: Uint8Array, origin: any) => {
@@ -133,17 +120,34 @@ export function getSharedCollections(ydoc: Y.Doc): SharedCollections {
  * Room creation is idempotent/set-once for identity fields: if the room
  * metadata already exists (e.g. a concurrent create from another peer),
  * this will not overwrite the existing facilitator or metadata.
+ *
+ * Only the facilitator should call this, and it's responsible for initializing
+ * the Y.Doc top-level collections (room, users, votables, etc).
  */
 export function createRoomState(ydoc: Y.Doc, input: CreateRoomInput): Room {
   const createdAt = input.createdAt ?? Date.now()
   console.log('[CRDT] createRoomState called with roomId:', input.id, 'facilitator:', input.facilitator.name, 'votables:', input.votables?.length ?? 0)
 
   ydoc.transact(() => {
+    const ymap = ydoc.getMap('shared')
+    
+    // Only the facilitator creates the top-level collections
+    if (!ymap.has('room')) {
+      console.log('[CRDT] Initializing collections for new room')
+      ymap.set('room', new Y.Map())
+      ymap.set('users', new Y.Map())
+      ymap.set('voterIds', new Y.Array())
+      ymap.set('observerIds', new Y.Array())
+      ymap.set('votables', new Y.Array())
+      ymap.set('votes', new Y.Map())
+      ymap.set('uiState', new Y.Map())
+    }
+
     const shared = getSharedCollections(ydoc)
 
     // Set-once: never overwrite an already-created room or reassign facilitator.
     if (!shared.room.has('id')) {
-      console.log('[CRDT] Creating new room in CRDT')
+      console.log('[CRDT] Creating new room metadata')
       shared.room.set('id', input.id)
       shared.room.set('name', input.name)
       shared.room.set('status', input.status ?? 'active')
@@ -151,7 +155,7 @@ export function createRoomState(ydoc: Y.Doc, input: CreateRoomInput): Room {
       shared.room.set('passphrase', input.passphrase)
       shared.room.set('facilitatorId', input.facilitator.id)
     } else {
-      console.log('[CRDT] Room already exists, skipping creation (expected for second peer)')
+      console.log('[CRDT] Room already exists, skipping creation (expected for concurrent create from another peer)')
     }
 
     indexUser(shared, input.facilitator)
