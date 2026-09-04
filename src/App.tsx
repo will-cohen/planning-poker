@@ -1189,7 +1189,7 @@ function AppShell(): React.ReactElement {
                             <Avatar avatarId={participant.profileIcon} name={participant.name} className="h-full w-full" />
                           </div>
                         )}
-                        <div className="text-xs font-semibold text-slate-700 text-center max-w-24 truncate" title={participant.name}>
+                        <div className="max-w-24 truncate rounded-full bg-white px-2 py-0.5 text-xs font-semibold text-slate-700 text-center shadow-sm" title={participant.name}>
                           {participant.name}
                         </div>
 
@@ -1207,7 +1207,7 @@ function AppShell(): React.ReactElement {
                           )}
                         </div>
 
-                        <span className={`text-[11px] ${onlineUserIds.has(participant.id) ? 'text-emerald-700' : 'text-slate-400'}`}>
+                        <span className={`text-[11px] font-medium px-2 py-0.5 rounded-full shadow-sm ${onlineUserIds.has(participant.id) ? 'bg-emerald-50 text-emerald-700' : 'bg-white text-slate-500'}`}>
                           {onlineUserIds.has(participant.id) ? 'Online' : 'Offline'}
                         </span>
                       </div>
