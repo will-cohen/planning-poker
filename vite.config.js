@@ -2,7 +2,11 @@ import { defineConfig } from 'vite'
 import path from 'path'
 import react from '@vitejs/plugin-react'
 
-export default defineConfig({
+export default defineConfig(({ command }) => ({
+  // 11ty serves Vite's output from dist/assets under the /assets/ URL path,
+  // so asset URLs baked into the bundle (e.g. imported SVGs) need that
+  // prefix too. The dev server still serves from the root.
+  base: command === 'build' ? '/assets/' : '/',
   plugins: [react()],
   server: {
     port: 5173,
@@ -14,6 +18,9 @@ export default defineConfig({
     lib: false,
     manifest: true,
     sourcemap: true,
+    // Keep all avatar/image assets as separate cacheable files instead of
+    // inlining them as base64 into the main JS bundle.
+    assetsInlineLimit: 0,
     rollupOptions: {
       input: 'src/main.tsx',
       output: {
@@ -39,4 +46,4 @@ export default defineConfig({
       '@': path.resolve(__dirname, './src'),
     },
   },
-})
+}))

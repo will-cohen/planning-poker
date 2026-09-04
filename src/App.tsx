@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom'
 
+import Avatar from './components/Avatar'
+import AvatarPicker from './components/AvatarPicker'
 import {
   CARD_VALUES,
   type CRDTAction,
@@ -9,6 +11,7 @@ import {
   type User,
   type Votable,
 } from './types'
+import { getRandomAvatarId } from './utils/avatars'
 import {
   createIndexedDBProvider,
   createCRDTReducer,
@@ -28,7 +31,6 @@ import { trackError, trackEvent } from './utils/telemetry'
 import {
   createInviteUrl,
   generateParticipantId,
-  generateProfileIcon,
   generateRoomId,
   isValidRoomId,
 } from './utils/room'
@@ -60,6 +62,7 @@ function AppShell(): React.ReactElement {
   const routeRoomId = params.roomId && isValidRoomId(params.roomId.toUpperCase()) ? params.roomId.toUpperCase() : ''
 
   const [displayName, setDisplayName] = useState('')
+  const [selectedAvatarId, setSelectedAvatarId] = useState(() => getRandomAvatarId())
   const [roomName, setRoomName] = useState('Sprint Planning')
   const [joinRoomId, setJoinRoomId] = useState(() => routeRoomId)
   const [joinRole, setJoinRole] = useState<Role>('voter')
@@ -478,11 +481,33 @@ function AppShell(): React.ReactElement {
   const createUser = (name: string, role: Role): User => ({
     id: generateParticipantId(),
     name,
-    profileIcon: generateProfileIcon(name),
+    profileIcon: selectedAvatarId,
     role,
     online: true,
     joinedAt: Date.now(),
   })
+
+  const handleChangeOwnAvatar = useCallback((avatarId: string): void => {
+    if (!session) {
+      return
+    }
+
+    if (currentParticipant) {
+      dispatchAction({
+        type: 'upsertUser',
+        payload: { ...currentParticipant, profileIcon: avatarId },
+      })
+    }
+
+    providerRef.current?.awareness.setLocalStateField('user', {
+      id: session.user.id,
+      name: currentParticipant?.name ?? session.user.name,
+      role: currentParticipant?.role ?? session.user.role,
+      profileIcon: avatarId,
+    })
+
+    trackEvent('avatar_changed', { roomId: session.roomId })
+  }, [session, currentParticipant, dispatchAction])
 
   const navigateToCreateRoom = (): void => {
     navigate('/create-room')
@@ -774,16 +799,19 @@ function AppShell(): React.ReactElement {
           <h2 className="text-2xl font-bold text-gray-900 mt-3">Create a New Room</h2>
           <p className="text-gray-600 mt-2">Start a new planning poker session as facilitator.</p>
           <div className="mt-5 space-y-3">
-            <label className="block">
-              <span className="text-sm text-gray-700">Your Name</span>
-              <input
-                aria-label="Create room display name"
-                value={displayName}
-                onChange={(event) => setDisplayName(event.target.value)}
-                className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary"
-                placeholder="Alex"
-              />
-            </label>
+            <div className="flex items-center gap-4">
+              <AvatarPicker value={selectedAvatarId} onChange={setSelectedAvatarId} name={displayName} size="profile" />
+              <label className="block flex-1">
+                <span className="text-sm text-gray-700">Your Name</span>
+                <input
+                  aria-label="Create room display name"
+                  value={displayName}
+                  onChange={(event) => setDisplayName(event.target.value)}
+                  className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary"
+                  placeholder="Alex"
+                />
+              </label>
+            </div>
             <label className="block">
               <span className="text-sm text-gray-700">Room Name</span>
               <input
@@ -809,16 +837,19 @@ function AppShell(): React.ReactElement {
           <h2 className="text-2xl font-bold text-gray-900">Join a Room</h2>
           <p className="text-gray-600 mt-2">Enter the room ID your facilitator shared with you.</p>
           <div className="mt-5 space-y-3">
-            <label className="block">
-              <span className="text-sm text-gray-700">Your Name</span>
-              <input
-                aria-label="Join room display name"
-                value={displayName}
-                onChange={(event) => setDisplayName(event.target.value)}
-                className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary"
-                placeholder="Sam"
-              />
-            </label>
+            <div className="flex items-center gap-4">
+              <AvatarPicker value={selectedAvatarId} onChange={setSelectedAvatarId} name={displayName} size="profile" />
+              <label className="block flex-1">
+                <span className="text-sm text-gray-700">Your Name</span>
+                <input
+                  aria-label="Join room display name"
+                  value={displayName}
+                  onChange={(event) => setDisplayName(event.target.value)}
+                  className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary"
+                  placeholder="Sam"
+                />
+              </label>
+            </div>
             <label className="block">
               <span className="text-sm text-gray-700">Room ID</span>
               <input
@@ -1145,9 +1176,19 @@ function AppShell(): React.ReactElement {
                         className="absolute flex flex-col items-center gap-2"
                         style={getSeatStyle(index, tableParticipants.length)}
                       >
-                        <div className={`h-14 w-14 rounded-full border-2 flex items-center justify-center text-lg font-black shadow ${isCurrentUser ? 'border-teal-500 bg-teal-50 text-teal-800' : 'border-slate-300 bg-white text-slate-700'}`}>
-                          {participant.profileIcon}
-                        </div>
+                        {isCurrentUser ? (
+                          <AvatarPicker
+                            value={participant.profileIcon}
+                            onChange={handleChangeOwnAvatar}
+                            name={participant.name}
+                            size="seat"
+                            className="border-teal-500 bg-teal-50"
+                          />
+                        ) : (
+                          <div className="h-14 w-14 rounded-full border-2 border-slate-300 bg-white overflow-hidden flex items-center justify-center text-lg font-black text-slate-700 shadow">
+                            <Avatar avatarId={participant.profileIcon} name={participant.name} className="h-full w-full" />
+                          </div>
+                        )}
                         <div className="text-xs font-semibold text-slate-700 text-center max-w-24 truncate" title={participant.name}>
                           {participant.name}
                         </div>
@@ -1215,17 +1256,27 @@ function AppShell(): React.ReactElement {
                 <div>
                   <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">Observers</p>
                   <div className="flex flex-wrap gap-2">
-                    {observerParticipants.map((participant) => (
-                      <div key={participant.id} className={`px-2.5 py-1.5 rounded-full border text-xs flex items-center gap-2 ${
-                        onlineUserIds.has(participant.id)
-                          ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
-                          : 'bg-slate-100 border-slate-300 text-slate-600 opacity-60'
-                      }`}>
-                        {participant.profileIcon} 
-                        <span>{participant.name}</span>
-                        <span className="text-[10px]">{onlineUserIds.has(participant.id) ? '●' : '○'}</span>
-                      </div>
-                    ))}
+                    {observerParticipants.map((participant) => {
+                      const isCurrentUser = participant.id === session?.user.id
+
+                      return (
+                        <div key={participant.id} className={`px-2.5 py-1.5 rounded-full border text-xs flex items-center gap-2 ${
+                          onlineUserIds.has(participant.id)
+                            ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
+                            : 'bg-slate-100 border-slate-300 text-slate-600 opacity-60'
+                        }`}>
+                          {isCurrentUser ? (
+                            <AvatarPicker value={participant.profileIcon} onChange={handleChangeOwnAvatar} name={participant.name} size="compact" />
+                          ) : (
+                            <span className="h-7 w-7 rounded-full overflow-hidden inline-flex items-center justify-center bg-white border border-slate-200">
+                              <Avatar avatarId={participant.profileIcon} name={participant.name} className="h-full w-full" />
+                            </span>
+                          )}
+                          <span>{participant.name}</span>
+                          <span className="text-[10px]">{onlineUserIds.has(participant.id) ? '●' : '○'}</span>
+                        </div>
+                      )
+                    })}
                   </div>
                 </div>
               ) : null}
